@@ -552,7 +552,9 @@ static void HandleDeleteIpv6Route(const NetLinkInfo &netLinkInfoBck,
     const NetLinkInfo &newNetLinkInfo, const int32_t netId)
 {
     bool lostIPv6Router = netLinkInfoBck.HasIpv6DefaultRoute() && !newNetLinkInfo.HasIpv6DefaultRoute();
-    if (lostIPv6Router && newNetLinkInfo.IsIpv4Provisioned()) {
+    // sleip0 SLAAC addresses and RDNSS have lifetimes independent of the default router.
+    // Restarting IPv6 here would erase the still-valid family when only Router Lifetime expires.
+    if (lostIPv6Router && newNetLinkInfo.IsIpv4Provisioned() && newNetLinkInfo.ifaceName_ != "sleip0") {
         NETMGR_LOG_I("UpdateRoutes, Restart IPV6");
         if (NetsysController::GetInstance().SetEnableIpv6(newNetLinkInfo.ifaceName_, 0, true) != NETMANAGER_SUCCESS) {
             NETMGR_LOG_E("SetEnableIpv6 failed");

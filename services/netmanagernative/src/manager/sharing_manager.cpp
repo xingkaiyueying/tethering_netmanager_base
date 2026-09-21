@@ -385,7 +385,8 @@ int32_t SharingManager::IpfwdAddInterfaceForward(const std::string &fromIface, c
         return -1;
     }
 
-    if (RouteManager::EnableSharing(fromIface, toIface)) {
+    result = RouteManager::EnableSharing(fromIface, toIface);
+    if (result != 0) {
         Rollback();
         return result;
     }
