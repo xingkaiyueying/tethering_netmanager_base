@@ -14,6 +14,8 @@
  */
 
 #include <charconv>
+#include <algorithm>
+#include <cerrno>
 #include "common_event_support.h"
 
 #include "broadcast_manager.h"
@@ -320,20 +322,165 @@ void Network::UpdateNetLinkInfoLinkType(const NetLinkInfo &netLinkInfo)
     netLinkInfo_ = tmpNetLinkInfo;
 }
 
+static int32_t SetNetworkResolver(int32_t netId, const NetLinkInfo &netLinkInfo);
+
+static bool Layer3Result(int32_t result, bool adding, bool address = false)
+{
+    if (result == NETMANAGER_SUCCESS) {
+        return true;
+    }
+    if (adding) {
+        return result == -EEXIST;
+    }
+    return result == -ESRCH || (address && result == -EADDRNOTAVAIL);
+}
+
+static bool Layer3LocalRoute(const Route &route, bool adding)
+{
+    if (route.destination_.address_ == LOCAL_ROUTE_NEXT_HOP ||
+        route.destination_.address_ == LOCAL_ROUTE_IPV6_DESTINATION) {
+        return true;
+    }
+    auto &netsys = NetsysController::GetInstance();
+    std::string destination = route.destination_.address_ + "/" + std::to_string(route.destination_.prefixlen_);
+    std::string nextHop = GetAddrFamily(route.destination_.address_) == AF_INET6 ? "" : LOCAL_ROUTE_NEXT_HOP;
+    int32_t ret = adding ? netsys.NetworkAddRoute(LOCAL_NET_ID, route.iface_, destination, nextHop) :
+        netsys.NetworkRemoveRoute(LOCAL_NET_ID, route.iface_, destination, nextHop);
+    return Layer3Result(ret, adding);
+}
+
+static bool Layer3RemoveRoutes(NetLinkInfo &applied, const NetLinkInfo &desired, int32_t netId)
+{
+    for (auto it = applied.routeList_.begin(); it != applied.routeList_.end();) {
+        // Removing an address can also remove its kernel connected route. Reconcile that family again.
+        bool addressRemoved = std::any_of(applied.netAddrList_.begin(), applied.netAddrList_.end(),
+            [&](const auto &address) {
+                return address.family_ == it->destination_.family_ && !desired.HasNetAddr(address);
+            });
+        if (desired.HasRoute(*it) && !addressRemoved) {
+            ++it;
+            continue;
+        }
+        std::string destination = it->destination_.address_ + "/" + std::to_string(it->destination_.prefixlen_);
+        // Remove the local copy first; retain the key until both removals finish, including failed cleanup.
+        if (!Layer3LocalRoute(*it, false) || !Layer3Result(NetsysController::GetInstance().NetworkRemoveRoute(
+            netId, it->iface_, destination, it->gateway_.address_), false)) {
+            return false;
+        }
+        it = applied.routeList_.erase(it);
+    }
+    return true;
+}
+
+static bool Layer3Addresses(NetLinkInfo &applied, const NetLinkInfo &desired)
+{
+    auto &netsys = NetsysController::GetInstance();
+    for (auto it = applied.netAddrList_.begin(); it != applied.netAddrList_.end();) {
+        if (desired.HasNetAddr(*it)) {
+            ++it;
+            continue;
+        }
+        if (!Layer3Result(netsys.DelInterfaceAddress(applied.ifaceName_, it->address_, it->prefixlen_), false, true)) {
+            return false;
+        }
+        it = applied.netAddrList_.erase(it);
+    }
+    for (const auto &address : desired.netAddrList_) {
+        if (applied.HasNetAddr(address)) {
+            continue;
+        }
+        // SLAAC addresses already present in the kernel are accepted without resetting their lifetimes.
+        if (!Layer3Result(netsys.AddInterfaceAddress(desired.ifaceName_, address.address_, address.prefixlen_), true)) {
+            return false;
+        }
+        applied.netAddrList_.push_back(address);
+    }
+    return true;
+}
+
+static bool Layer3AddRoutes(NetLinkInfo &applied, const NetLinkInfo &desired, int32_t netId)
+{
+    for (const auto &route : desired.routeList_) {
+        if (!applied.HasRoute(route)) {
+            std::string destination = route.destination_.address_ + "/" + std::to_string(route.destination_.prefixlen_);
+            if (!Layer3Result(NetsysController::GetInstance().NetworkAddRoute(netId, route.iface_, destination,
+                route.gateway_.address_, route.isExcludedRoute_), true)) {
+                return false;
+            }
+            applied.routeList_.push_back(route);
+        }
+        // Retry the local copy even when the physical-network copy succeeded on an earlier attempt.
+        if (!Layer3LocalRoute(route, true)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool ReconcileLayer3Link(NetLinkInfo &applied, const NetLinkInfo &desired, int32_t netId,
+    NetBearType bearerType)
+{
+    // A live NearLink supplier owns one interface. A different interface requires a new supplier.
+    if (!applied.ifaceName_.empty() && applied.ifaceName_ != desired.ifaceName_) {
+        return false;
+    }
+    auto &netsys = NetsysController::GetInstance();
+    if (applied.ifaceName_.empty()) {
+        if (netsys.NetworkAddInterface(netId, desired.ifaceName_, bearerType) != NETMANAGER_SUCCESS) {
+            return false;
+        }
+        applied.ifaceName_ = desired.ifaceName_;
+    }
+    if (!Layer3RemoveRoutes(applied, desired, netId) || !Layer3Addresses(applied, desired) ||
+        !Layer3AddRoutes(applied, desired, netId)) {
+        return false;
+    }
+    if (SetNetworkResolver(netId, desired) != NETMANAGER_SUCCESS ||
+        netsys.SetUserDefinedServerFlag(netId, desired.isUserDefinedDnsServer_) != NETMANAGER_SUCCESS) {
+        return false;
+    }
+    applied.dnsList_ = desired.dnsList_;
+    applied.isUserDefinedDnsServer_ = desired.isUserDefinedDnsServer_;
+    if (desired.mtu_ != applied.mtu_) {
+        if (netsys.SetInterfaceMtu(desired.ifaceName_, desired.mtu_) != NETMANAGER_SUCCESS) {
+            return false;
+        }
+        applied.mtu_ = desired.mtu_;
+    }
+    return true;
+}
+
 bool Network::UpdateNetLinkInfo(const NetLinkInfo &netLinkInfo)
 {
     NETMGR_LOG_D("update net link information process");
     UpdateStatsCached(netLinkInfo);
-    UpdateInterfaces(netLinkInfo);
-    bool isIfaceNameInUse = NetConnServiceIface().IsIfaceNameInUse(netLinkInfo.ifaceName_, netId_);
     bool hasSameIpAddr = false;
-    if (!isIfaceNameInUse || isSupportInternet_) {
-        hasSameIpAddr = UpdateIpAddrs(netLinkInfo);
+    if (netLinkInfo.ifaceName_ == "sleip0") {
+        NetLinkInfo applied;
+        {
+            std::shared_lock<std::shared_mutex> lock(netLinkInfoMutex_);
+            applied = netLinkInfo_;
+        }
+        bool success = ReconcileLayer3Link(applied, netLinkInfo, netId_, netSupplierType_);
+        {
+            std::unique_lock<std::shared_mutex> lock(netLinkInfoMutex_);
+            netLinkInfo_ = applied;
+        }
+        if (!success) {
+            SendSupplierFaultHiSysEvent(FAULT_UPDATE_NETLINK_INFO_FAILED, ERROR_MSG_ADD_NET_ROUTES_FAILED);
+            return false;
+        }
+    } else {
+        UpdateInterfaces(netLinkInfo);
+        bool isIfaceNameInUse = NetConnServiceIface().IsIfaceNameInUse(netLinkInfo.ifaceName_, netId_);
+        if (!isIfaceNameInUse || isSupportInternet_) {
+            hasSameIpAddr = UpdateIpAddrs(netLinkInfo);
+        }
+        UpdateRoutes(netLinkInfo);
+        UpdateDns(netLinkInfo);
+        UpdateMtu(netLinkInfo);
+        UpdateTcpBufferSize(netLinkInfo);
     }
-    UpdateRoutes(netLinkInfo);
-    UpdateDns(netLinkInfo);
-    UpdateMtu(netLinkInfo);
-    UpdateTcpBufferSize(netLinkInfo);
     UpdateNetLinkInfoLinkType(netLinkInfo);
     std::shared_lock<std::shared_mutex> lock(netLinkInfoMutex_);
     NetLinkInfo netLinkInfoBck = netLinkInfo_;
@@ -694,7 +841,7 @@ void Network::BatchUpdateRoutes(const NetLinkInfo &netLinkInfoBck, const NetLink
     }
 }
 
-void Network::UpdateDns(const NetLinkInfo &netLinkInfo)
+static int32_t SetNetworkResolver(int32_t netId, const NetLinkInfo &netLinkInfo)
 {
     NETMGR_LOG_D("Network UpdateDns in.");
     std::vector<std::string> servers;
@@ -731,7 +878,12 @@ void Network::UpdateDns(const NetLinkInfo &netLinkInfo)
     }
     NETMGR_LOG_I("update dns server: %{public}s", ss.str().c_str());
     // Call netsys to set dns, use default timeout and retry
-    int32_t ret = NetsysController::GetInstance().SetResolverConfig(netId_, 0, 0, servers, domains);
+    return NetsysController::GetInstance().SetResolverConfig(netId, 0, 0, servers, domains);
+}
+
+void Network::UpdateDns(const NetLinkInfo &netLinkInfo)
+{
+    int32_t ret = SetNetworkResolver(netId_, netLinkInfo);
     if (ret != NETMANAGER_SUCCESS) {
         SendSupplierFaultHiSysEvent(FAULT_UPDATE_NETLINK_INFO_FAILED, ERROR_MSG_SET_NET_RESOLVER_FAILED);
     }
