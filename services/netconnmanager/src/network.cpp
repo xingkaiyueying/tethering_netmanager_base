@@ -462,10 +462,8 @@ bool Network::UpdateNetLinkInfo(const NetLinkInfo &netLinkInfo)
             applied = netLinkInfo_;
         }
         bool success = ReconcileLayer3Link(applied, netLinkInfo, netId_, netSupplierType_);
-        {
-            std::unique_lock<std::shared_mutex> lock(netLinkInfoMutex_);
-            netLinkInfo_ = applied;
-        }
+        // Recompute family flags from the applied addresses/routes even after a partial failure.
+        UpdateNetLinkInfoLinkType(applied);
         if (!success) {
             SendSupplierFaultHiSysEvent(FAULT_UPDATE_NETLINK_INFO_FAILED, ERROR_MSG_ADD_NET_ROUTES_FAILED);
             return false;
