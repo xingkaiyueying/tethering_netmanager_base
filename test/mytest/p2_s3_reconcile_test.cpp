@@ -246,6 +246,18 @@ int main()
     route6.destination_.address_ = "fd77::";
     desired.routeList_.push_back(route6);
     assert(n.UpdateNetLinkInfo(desired));
+    // The kernel created this SLAAC address. Publishing it must not reset its
+    // lifetime, and withdrawing a transient snapshot must not remove it.
+    assert(!sys.resources.count("afd77::2"));
+    NetLinkInfo without6 = desired;
+    without6.netAddrList_.pop_back();
+    without6.routeList_.pop_back();
+    sys.failure = "address-";
+    assert(n.UpdateNetLinkInfo(without6));
+    assert(!n.netLinkInfo_.HasNetAddr(v6));
+    assert(!sys.resources.count("afd77::2"));
+    sys.failure.clear();
+    assert(n.UpdateNetLinkInfo(desired));
     NetLinkInfo only6 = desired;
     only6.netAddrList_.pop_front();
     only6.routeList_.pop_front();

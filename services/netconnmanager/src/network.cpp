@@ -380,7 +380,10 @@ static bool Layer3Addresses(NetLinkInfo &applied, const NetLinkInfo &desired)
             ++it;
             continue;
         }
-        if (!Layer3Result(netsys.DelInterfaceAddress(applied.ifaceName_, it->address_, it->prefixlen_), false, true)) {
+        // On sleip0 the IPv6 address comes from kernel SLAAC. A transient DHCP
+        // snapshot must not delete it before the kernel's own lifetime expires.
+        if (it->family_ != AF_INET6 &&
+            !Layer3Result(netsys.DelInterfaceAddress(applied.ifaceName_, it->address_, it->prefixlen_), false, true)) {
             return false;
         }
         it = applied.netAddrList_.erase(it);
@@ -389,8 +392,9 @@ static bool Layer3Addresses(NetLinkInfo &applied, const NetLinkInfo &desired)
         if (applied.HasNetAddr(address)) {
             continue;
         }
-        // SLAAC addresses already present in the kernel are accepted without resetting their lifetimes.
-        if (!Layer3Result(netsys.AddInterfaceAddress(desired.ifaceName_, address.address_, address.prefixlen_), true)) {
+        // The kernel owns sleip0 SLAAC addresses and their preferred/valid lifetimes.
+        if (address.family_ != AF_INET6 &&
+            !Layer3Result(netsys.AddInterfaceAddress(desired.ifaceName_, address.address_, address.prefixlen_), true)) {
             return false;
         }
         applied.netAddrList_.push_back(address);
