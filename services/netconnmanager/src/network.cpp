@@ -363,8 +363,9 @@ static bool Layer3RemoveRoutes(NetLinkInfo &applied, const NetLinkInfo &desired,
         }
         std::string destination = it->destination_.address_ + "/" + std::to_string(it->destination_.prefixlen_);
         // Remove the local copy first; retain the key until both removals finish, including failed cleanup.
+        std::string nextHop = it->destination_.family_ == AF_INET6 && !it->hasGateway_ ? "" : it->gateway_.address_;
         if (!Layer3LocalRoute(*it, false) || !Layer3Result(NetsysController::GetInstance().NetworkRemoveRoute(
-            netId, it->iface_, destination, it->gateway_.address_), false)) {
+            netId, it->iface_, destination, nextHop), false)) {
             return false;
         }
         it = applied.routeList_.erase(it);
@@ -407,8 +408,10 @@ static bool Layer3AddRoutes(NetLinkInfo &applied, const NetLinkInfo &desired, in
     for (const auto &route : desired.routeList_) {
         if (!applied.HasRoute(route)) {
             std::string destination = route.destination_.address_ + "/" + std::to_string(route.destination_.prefixlen_);
+            std::string nextHop = route.destination_.family_ == AF_INET6 && !route.hasGateway_ ? "" :
+                route.gateway_.address_;
             if (!Layer3Result(NetsysController::GetInstance().NetworkAddRoute(netId, route.iface_, destination,
-                route.gateway_.address_, route.isExcludedRoute_), true)) {
+                nextHop, route.isExcludedRoute_), true)) {
                 return false;
             }
             applied.routeList_.push_back(route);

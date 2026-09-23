@@ -52,6 +52,7 @@ struct Route {
     INetAddr destination_, gateway_;
     std::string iface_ = "sleip0";
     bool isExcludedRoute_ = false;
+    bool hasGateway_ = false;
     bool operator==(const Route &o) const
     {
         return destination_ == o.destination_ && gateway_ == o.gateway_;
@@ -105,8 +106,9 @@ struct NetsysController {
     {
         return Change("address-", "a" + a, false);
     }
-    int NetworkAddRoute(int id, const std::string &, const std::string &d, const std::string &, bool = false)
+    int NetworkAddRoute(int id, const std::string &, const std::string &d, const std::string &nextHop, bool = false)
     {
+        if (d == "fd77::/64" && nextHop == "::") return -EINVAL;
         return Change(id == 99 ? "local+" : "route+", std::to_string(id) + d, true);
     }
     int NetworkRemoveRoute(int id, const std::string &, const std::string &d, const std::string &)
@@ -244,6 +246,7 @@ int main()
     Route route6;
     route6.destination_ = v6;
     route6.destination_.address_ = "fd77::";
+    route6.gateway_.address_ = "::";
     desired.routeList_.push_back(route6);
     assert(n.UpdateNetLinkInfo(desired));
     // The kernel created this SLAAC address. Publishing it must not reset its
