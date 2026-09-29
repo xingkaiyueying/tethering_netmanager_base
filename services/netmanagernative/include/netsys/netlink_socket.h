@@ -39,6 +39,9 @@ constexpr uint32_t LOCAL_PRIORITY = 32767;
  */
 int32_t SendNetlinkMsgToKernel(nlmsghdr *msg, uint32_t table = 0);
 
+// Internal Netsys helper for callers that must observe the kernel result of a mutation.
+int32_t SendNetlinkMsgToKernelWithAck(nlmsghdr *msg);
+
 /**
  * Clear route or rule configure
  *

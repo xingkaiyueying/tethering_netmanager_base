@@ -159,6 +159,10 @@ int32_t RouteManager::AddRoute(TableType tableType, NetworkRouteInfo networkRout
     }
 
     int32_t ret = UpdateRouteRule(RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL, routeInfo);
+    if (interfaceName == "sleip0" && ret == -EEXIST) {
+        routeRepeat = true;
+        return 0;
+    }
     if (ret == EEXIST) {
         routeRepeat = true;
     } else {
@@ -1630,6 +1634,9 @@ int32_t RouteManager::SendRouteToKernel(uint16_t action, uint16_t routeFlag, rtm
         }
     }
 
+    if (routeInfo.routeInterfaceName == "sleip0") {
+        return SendNetlinkMsgToKernelWithAck(nlmsg.GetNetLinkMessage());
+    }
     return SendNetlinkMsgToKernel(nlmsg.GetNetLinkMessage());
 }
 
