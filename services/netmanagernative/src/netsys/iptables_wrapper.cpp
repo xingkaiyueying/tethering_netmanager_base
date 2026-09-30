@@ -18,6 +18,9 @@
 #include <unistd.h>
 #include <sys/syscall.h>
 #include <sys/resource.h>
+#include <sys/wait.h>
+#include <cerrno>
+#include <vector>
 
 #include "datetime_ex.h"
 #include "net_manager_constants.h"
@@ -41,6 +44,29 @@ constexpr const char *IPTABLES_RULE_PATH = "/data/service/el1/public/netsysnativ
 constexpr const int32_t MAX_IPTABLES_FFRT_TASK_NUM = 200;
 constexpr const int32_t IPTABLES_PROCESS_PRIORITY = -20;
 constexpr const int32_t DEFAULT_PROCESS_PRIORITY = 0;
+int32_t ExecuteChecked(const std::string &binary, const std::string &arguments)
+{
+    // No shell. Arguments originate from validated internal sharing rules and fixed paths.
+    std::vector<std::string> words = CommonUtils::Split(binary + " " + arguments, " ");
+    std::vector<char *> argv;
+    for (auto &word : words)
+        if (!word.empty())
+            argv.push_back(word.data());
+    argv.push_back(nullptr);
+    pid_t child = fork();
+    if (child < 0)
+        return NETMANAGER_ERROR;
+    if (child == 0) {
+        execv(binary.c_str(), argv.data());
+        _exit(127);
+    }
+    int status = 0;
+    pid_t result;
+    do {
+        result = waitpid(child, &status, 0);
+    } while (result < 0 && errno == EINTR);
+    return result == child && WIFEXITED(status) && WEXITSTATUS(status) == 0 ? NETMANAGER_SUCCESS : NETMANAGER_ERROR;
+}
 } // namespace
 
 IptablesWrapper::IptablesWrapper()
@@ -227,6 +253,30 @@ int32_t IptablesWrapper::RunMutipleCommands(const IpType &ipType, const std::vec
     }
 
     return NetManagerStandard::NETMANAGER_SUCCESS;
+}
+
+int32_t IptablesWrapper::RunCheckedCommand(const IpType &ipType, const std::string &command, bool restore)
+{
+    // Call one family at a time so the owner can commit/retry partial dual-stack operations.
+    if (!iptablesWrapperFfrtQueue_ || (ipType != IPTYPE_IPV4 && ipType != IPTYPE_IPV6) ||
+        !(ipType == IPTYPE_IPV4 ? isIptablesSystemAccess_ : isIp6tablesSystemAccess_))
+        return NETMANAGER_ERROR;
+    int32_t result = NETMANAGER_ERROR;
+    auto task = [&]() {
+        if (restore && !CommonUtils::WriteFile(IPTABLES_RULE_PATH, command))
+            return;
+        std::string binary = restore ? (ipType == IPTYPE_IPV4 ? IPTABLES_RESTORE_CMD_PATH : IP6TABLES_RESTORE_CMD_PATH)
+                                     : (ipType == IPTYPE_IPV4 ? IPATBLES_CMD_PATH : IP6TABLES_CMD_PATH);
+        result = ExecuteChecked(binary,
+                                restore ? std::string(IPTABLES_RULE_PATH) + " --noflush --wait=5" : command + " -w 5");
+    };
+#if UNITTEST_FORBID_FFRT
+    task();
+#else
+    auto handle = iptablesWrapperFfrtQueue_->submit_h(task);
+    iptablesWrapperFfrtQueue_->wait(handle);
+#endif
+    return result;
 }
 
 int32_t IptablesWrapper::RunRestoreCommands(const IpType &ipType, const std::string &command)

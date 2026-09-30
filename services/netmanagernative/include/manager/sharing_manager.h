@@ -115,6 +115,11 @@ public:
 private:
     std::shared_mutex forwardingRequestsMutex_;
     std::mutex interfaceForwardsMutex_;
+    std::mutex sharingOperationMutex_;
+    std::mutex natMutex_;
+    std::set<std::pair<std::string, std::string>> natPairs_;
+    bool natMangleOwned_{false};
+    std::set<std::string> forwardingRoutes_, forwardingRemoving_, forwarded4_, forwarded6_;
     std::set<std::string> forwardingRequests_;
     std::set<std::string> interfaceForwards_;
     std::map<std::string, uint8_t> forbidIpsMap_;
@@ -132,6 +137,9 @@ private:
     std::map<std::string, std::string> sharingIfaceToIpMap_;
     std::mutex sharingIfaceToIpMutex_;
 
+    int32_t ReconcileNatPairs(const std::set<std::pair<std::string, std::string>> &pairs);
+    int32_t SetNearlinkIsolation(bool enabled);
+    int32_t ReconcileForwardPairs(const std::set<std::string> &pairs);
     void IpfwdExecSaveBak();
     void InitChildChains();
     void CheckInited();
