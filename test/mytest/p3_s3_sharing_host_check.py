@@ -117,6 +117,7 @@ int main(){
  assert(m.EnableNat("usb0","wlan0")==0);
  assert(m.natPairs_.size()==3 && IptablesWrapper::tables[1]["nat"]["tetherctrl_nat_POSTROUTING"].size()==1);
  assert(IptablesWrapper::tables[2]["nat"]["tetherctrl_nat_POSTROUTING"].empty());
+ assert(m.natMangle6Owned_ && ruleContains(2,"mangle","FORWARD","tetherctrl_mangle_FORWARD"));
  assert(m.DisableNat("sleip0","wlan0")==0 && m.natPairs_.size()==2);
  assert(ruleContains(1,"nat","tetherctrl_nat_POSTROUTING","-o wlan0 -j MASQUERADE"));
  assert(ruleContains(1,"mangle","FORWARD","tetherctrl_mangle_FORWARD"));
@@ -137,6 +138,11 @@ int main(){
  IptablesWrapper::failFamily=1;IptablesWrapper::failTable="nat";
  assert(m.EnableNat("sleip0","eth0")==-77 && m.natPairs_.empty() && m.natMangleOwned_);
  IptablesWrapper::failFamily=0;assert(m.DisableNat("sleip0","eth0")==0 && !m.natMangleOwned_);
+ // IPv6 MSS failure after IPv4 MSS install retains each family independently.
+ IptablesWrapper::failFamily=2;IptablesWrapper::failTable="mangle";
+ assert(m.EnableNat("sleip0","eth0")==-77 && m.natMangleOwned_ && !m.natMangle6Owned_);
+ IptablesWrapper::failFamily=0;assert(m.DisableNat("sleip0","eth0")==0);
+ assert(!m.natMangleOwned_ && !m.natMangle6Owned_);
  assert(m.EnableNat("sleip0;bad","eth0")!=0);
  RouteManager::addError=-55;assert(m.IpfwdAddInterfaceForward("sleip0","eth0")==-55);
  assert(m.interfaceForwards_.empty());RouteManager::addError=0;

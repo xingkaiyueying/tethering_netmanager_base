@@ -222,17 +222,21 @@ int32_t SharingManager::IpDisableForwarding(const std::string &requestor)
 int32_t SharingManager::ReconcileNatPairs(const std::set<std::pair<std::string, std::string>> &pairs)
 {
     // Commit one table at a time. Failed MSS/NAT operations retain exactly the resource still owned.
-    if (!pairs.empty() && !natMangleOwned_) {
+    for (auto family : {IPTYPE_IPV4, IPTYPE_IPV6}) {
+        auto &owned = family == IPTYPE_IPV4 ? natMangleOwned_ : natMangle6Owned_;
+        if (pairs.empty() || owned) {
+            continue;
+        }
         std::string cmds;
         CombineRestoreRules(MANGLE_TABLE, cmds);
         CombineRestoreRules(CLEAR_TETHERCTRL_MANGLE_FORWARD, cmds);
         CombineRestoreRules(APPEND_MANGLE_FORWARD, cmds);
         CombineRestoreRules(APPEND_TETHERCTRL_MANGLE_FORWARD, cmds);
         CombineRestoreRules(CMD_COMMIT, cmds);
-        int32_t ret = iptablesWrapper_->RunCheckedCommand(IPTYPE_IPV4, cmds, true);
+        int32_t ret = iptablesWrapper_->RunCheckedCommand(family, cmds, true);
         if (ret != 0)
             return ret;
-        natMangleOwned_ = true;
+        owned = true;
     }
     if (pairs != natPairs_) {
         std::string cmds;
@@ -253,16 +257,20 @@ int32_t SharingManager::ReconcileNatPairs(const std::set<std::pair<std::string, 
             return ret;
         natPairs_ = pairs;
     }
-    if (pairs.empty() && natMangleOwned_) {
+    for (auto family : {IPTYPE_IPV4, IPTYPE_IPV6}) {
+        auto &owned = family == IPTYPE_IPV4 ? natMangleOwned_ : natMangle6Owned_;
+        if (!pairs.empty() || !owned) {
+            continue;
+        }
         std::string cmds;
         CombineRestoreRules(MANGLE_TABLE, cmds);
         CombineRestoreRules(CLEAR_TETHERCTRL_MANGLE_FORWARD, cmds);
         CombineRestoreRules(DELETE_TETHERCTRL_MANGLE_FORWARD, cmds);
         CombineRestoreRules(CMD_COMMIT, cmds);
-        int32_t ret = iptablesWrapper_->RunCheckedCommand(IPTYPE_IPV4, cmds, true);
+        int32_t ret = iptablesWrapper_->RunCheckedCommand(family, cmds, true);
         if (ret != 0)
             return ret;
-        natMangleOwned_ = false;
+        owned = false;
     }
     return 0;
 }
