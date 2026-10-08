@@ -13,8 +13,17 @@
  * limitations under the License.
  */
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
+#include <netinet/in.h>
 #include <netinet/ip.h>
 #include <netinet/udp.h>
+#include <array>
+#include <cerrno>
+#include <cstring>
+#include <sys/socket.h>
 #include <thread>
 #include <pthread.h>
 #include <unistd.h>
@@ -43,6 +52,95 @@ constexpr size_t DNS_HEAD_LENGTH = 12;
 constexpr int32_t EPOLL_TASK_NUMBER = 10;
 constexpr int32_t EPOLL_LOOP_EXIT = 1;
 constexpr uint32_t EPOLL_LOOP_ADDR = 16777343;
+
+namespace {
+int32_t ReceiveDnsRequest(int32_t fd, RecvBuff &buffer, AlignedSockAddr &client, int32_t family)
+{
+    alignas(cmsghdr) std::array<char, CMSG_SPACE(sizeof(in6_pktinfo)) + CMSG_SPACE(sizeof(in_pktinfo))> control{};
+    iovec data{buffer.questionsBuff, sizeof(buffer.questionsBuff)};
+    msghdr message{};
+    message.msg_name = &client;
+    message.msg_namelen = family == AF_INET ? sizeof(sockaddr_in) : sizeof(sockaddr_in6);
+    message.msg_iov = &data;
+    message.msg_iovlen = 1;
+    message.msg_control = control.data();
+    message.msg_controllen = control.size();
+    buffer.replyIfindex = 0;
+    buffer.replyAddress = {};
+    int32_t length;
+    do {
+        length = recvmsg(fd, &message, 0);
+    } while (length < 0 && errno == EINTR);
+    if (length <= 0) {
+        return length;
+    }
+    if ((message.msg_flags & (MSG_TRUNC | MSG_CTRUNC)) != 0 || client.sa.sa_family != family) {
+        errno = EMSGSIZE;
+        return -1;
+    }
+    for (auto header = CMSG_FIRSTHDR(&message); header; header = CMSG_NXTHDR(&message, header)) {
+        if (family == AF_INET && header->cmsg_level == IPPROTO_IP && header->cmsg_type == IP_PKTINFO &&
+            header->cmsg_len >= CMSG_LEN(sizeof(in_pktinfo))) {
+            in_pktinfo info{};
+            memcpy(&info, CMSG_DATA(header), sizeof(info));
+            buffer.replyIfindex = info.ipi_ifindex;
+            buffer.replyAddress.sin.sin_family = AF_INET;
+            buffer.replyAddress.sin.sin_addr = info.ipi_addr;
+        } else if (family == AF_INET6 && header->cmsg_level == IPPROTO_IPV6 &&
+                   header->cmsg_type == IPV6_PKTINFO && header->cmsg_len >= CMSG_LEN(sizeof(in6_pktinfo))) {
+            in6_pktinfo info{};
+            memcpy(&info, CMSG_DATA(header), sizeof(info));
+            buffer.replyIfindex = info.ipi6_ifindex;
+            buffer.replyAddress.sin6.sin6_family = AF_INET6;
+            buffer.replyAddress.sin6.sin6_addr = info.ipi6_addr;
+        }
+    }
+    // Never silently send a multi-interface reply through the current default route.
+    if (buffer.replyIfindex <= 0) {
+        errno = ENOMSG;
+        return -1;
+    }
+    return length;
+}
+
+int32_t SendDnsReply(int32_t fd, char *response, int32_t length, AlignedSockAddr &client, const RecvBuff &request)
+{
+    alignas(cmsghdr) std::array<char, CMSG_SPACE(sizeof(in6_pktinfo)) + CMSG_SPACE(sizeof(in_pktinfo))> control{};
+    iovec data{response, static_cast<size_t>(length)};
+    msghdr message{};
+    message.msg_name = &client;
+    message.msg_namelen = client.sa.sa_family == AF_INET ? sizeof(sockaddr_in) : sizeof(sockaddr_in6);
+    message.msg_iov = &data;
+    message.msg_iovlen = 1;
+    message.msg_control = control.data();
+    message.msg_controllen = client.sa.sa_family == AF_INET ? CMSG_SPACE(sizeof(in_pktinfo))
+                                                          : CMSG_SPACE(sizeof(in6_pktinfo));
+    auto header = CMSG_FIRSTHDR(&message);
+    if (client.sa.sa_family == AF_INET) {
+        header->cmsg_level = IPPROTO_IP;
+        header->cmsg_type = IP_PKTINFO;
+        header->cmsg_len = CMSG_LEN(sizeof(in_pktinfo));
+        in_pktinfo info{};
+        info.ipi_ifindex = request.replyIfindex;
+        info.ipi_spec_dst = request.replyAddress.sin.sin_addr;
+        memcpy(CMSG_DATA(header), &info, sizeof(info));
+    } else {
+        header->cmsg_level = IPPROTO_IPV6;
+        header->cmsg_type = IPV6_PKTINFO;
+        header->cmsg_len = CMSG_LEN(sizeof(in6_pktinfo));
+        in6_pktinfo info{};
+        info.ipi6_ifindex = request.replyIfindex;
+        info.ipi6_addr = request.replyAddress.sin6.sin6_addr;
+        memcpy(CMSG_DATA(header), &info, sizeof(info));
+    }
+    int32_t sent;
+    do {
+        sent = sendmsg(fd, &message, 0);
+    } while (sent < 0 && errno == EINTR);
+    return sent;
+}
+} // namespace
+
 DnsProxyListen::DnsProxyListen() : proxySockFd_(-1), proxySockFd6_(-1) {}
 DnsProxyListen::~DnsProxyListen()
 {
@@ -197,9 +295,17 @@ void DnsProxyListen::SendDnsBack2Client(int32_t socketFd)
     char requesData[MAX_REQUESTDATA_LEN] = {0};
     int32_t resLen =
         PollUdpDataTransfer::PollUdpRecvData(socketFd, requesData, MAX_REQUESTDATA_LEN, addrParse, addrLen);
-    if (resLen > 0 && CheckDnsResponse(requesData, MAX_REQUESTDATA_LEN)) {
+    if (resLen > 0 && CheckDnsResponse(requesData, resLen)) {
         NETNATIVE_LOG_D("send %{public}d back to client.", socketFd);
-        DnsSendRecvParseData(proxySocket, requesData, resLen, iter->second.GetClientSock());
+        const auto &request = iter->second.GetRecvBuff();
+        if (request.replyIfindex > 0) {
+            int32_t sent = SendDnsReply(proxySocket, requesData, resLen, clientSock, request);
+            NETNATIVE_LOGI("[NearlinkIpShare][DnsReply] family=%{public}d ifindex=%{public}d "
+                           "bytes=%{public}d code=%{public}d", clientSock.sa.sa_family, request.replyIfindex,
+                           sent, sent == resLen ? 0 : errno);
+        } else {
+            DnsSendRecvParseData(proxySocket, requesData, resLen, clientSock);
+        }
         serverIdxOfSocket.erase(iter);
         return;
     }
@@ -281,20 +387,13 @@ void DnsProxyListen::GetRequestAndTransmit(int32_t family)
         return;
     }
 
-    if (family == AF_INET) {
-        socklen_t len = sizeof(sockaddr_in);
-        recvBuff->questionLen = recvfrom(proxySockFd_, recvBuff->questionsBuff, MAX_REQUESTDATA_LEN, 0,
-                                         reinterpret_cast<sockaddr *>(&(clientAddr->sin)), &len);
-    } else {
-        socklen_t len = sizeof(sockaddr_in6);
-        recvBuff->questionLen = recvfrom(proxySockFd6_, recvBuff->questionsBuff, MAX_REQUESTDATA_LEN, 0,
-                                         reinterpret_cast<sockaddr *>(&(clientAddr->sin6)), &len);
-    }
+    recvBuff->questionLen = ReceiveDnsRequest(family == AF_INET ? proxySockFd_ : proxySockFd6_,
+                                             *recvBuff, *clientAddr, family);
     if (recvBuff->questionLen <= 0) {
         NETNATIVE_LOGE("read errno %{public}d", errno);
         return;
     }
-    if (!CheckDnsQuestion(recvBuff->questionsBuff, MAX_REQUESTDATA_LEN)) {
+    if (!CheckDnsQuestion(recvBuff->questionsBuff, recvBuff->questionLen)) {
         NETNATIVE_LOGE("read buff is not dns question");
         return;
     }
@@ -334,6 +433,12 @@ void DnsProxyListen::InitListenForIpv4()
     proxyAddr.sin_family = AF_INET;
     proxyAddr.sin_addr.s_addr = htonl(INADDR_ANY);
     proxyAddr.sin_port = htons(DNS_PROXY_PORT);
+    if (setsockopt(proxySockFd_, IPPROTO_IP, IP_PKTINFO, &on, sizeof(on)) < 0) {
+        NETNATIVE_LOGE("setsockopt IP_PKTINFO failed errno:%{public}d", errno);
+        close(proxySockFd_);
+        proxySockFd_ = -1;
+        return;
+    }
     if (bind(proxySockFd_, (sockaddr *)&proxyAddr, sizeof(proxyAddr)) == -1) {
         NETNATIVE_LOGE("bind errno %{public}d: %{public}s", errno, strerror(errno));
         close(proxySockFd_);
@@ -364,6 +469,12 @@ void DnsProxyListen::InitListenForIpv6()
     }
     if (setsockopt(proxySockFd6_, IPPROTO_IPV6, IPV6_V6ONLY, &on, sizeof(on)) < 0) {
         NETNATIVE_LOGE("setsockopt failed");
+        close(proxySockFd6_);
+        proxySockFd6_ = -1;
+        return;
+    }
+    if (setsockopt(proxySockFd6_, IPPROTO_IPV6, IPV6_RECVPKTINFO, &on, sizeof(on)) < 0) {
+        NETNATIVE_LOGE("setsockopt IPV6_RECVPKTINFO failed errno:%{public}d", errno);
         close(proxySockFd6_);
         proxySockFd6_ = -1;
         return;

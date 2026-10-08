@@ -33,6 +33,9 @@ static constexpr int32_t EPOLL_TIMEOUT = 3000;
 struct RecvBuff {
     char questionsBuff[MAX_REQUESTDATA_LEN];
     int32_t questionLen;
+    // Reply on the link and local address that received this individual request.
+    int32_t replyIfindex = 0;
+    AlignedSockAddr replyAddress{};
 };
 
 class DnsProxyRequestSocket final {

@@ -1,6 +1,7 @@
 """Execute actual router-loss handling and sharing failure propagation with platform doubles."""
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 
 repo = Path(__file__).resolve().parents[2]
@@ -39,3 +40,6 @@ int main(){
     exe = out / 'test.exe'
     subprocess.run(['g++', '-std=c++17', str(out / 'test.cpp'), '-o', str(exe)], check=True)
     subprocess.run([str(exe)], check=True)
+
+# The shared DNS listener must preserve the receiving link independently of default-route selection.
+subprocess.run([sys.executable, str(Path(__file__).with_name('p3_s3_dns_proxy_host_check.py'))], check=True)
