@@ -116,7 +116,8 @@ int main(){
  assert(m.EnableNat("sleip0","wlan0")==0 && m.EnableNat("sleip1","wlan0")==0);
  assert(m.EnableNat("usb0","wlan0")==0);
  assert(m.natPairs_.size()==3 && IptablesWrapper::tables[1]["nat"]["tetherctrl_nat_POSTROUTING"].size()==1);
- assert(IptablesWrapper::tables[2]["nat"]["tetherctrl_nat_POSTROUTING"].empty());
+ assert(m.nat6Pairs_.size()==3 && IptablesWrapper::tables[2]["nat"]["tetherctrl_nat_POSTROUTING"].size()==1);
+ assert(ruleContains(2,"nat","tetherctrl_nat_POSTROUTING","-o wlan0 -j MASQUERADE"));
  assert(m.natMangle6Owned_ && ruleContains(2,"mangle","FORWARD","tetherctrl_mangle_FORWARD"));
  assert(m.DisableNat("sleip0","wlan0")==0 && m.natPairs_.size()==2);
  assert(ruleContains(1,"nat","tetherctrl_nat_POSTROUTING","-o wlan0 -j MASQUERADE"));
@@ -142,6 +143,33 @@ int main(){
  IptablesWrapper::failFamily=2;IptablesWrapper::failTable="mangle";
  assert(m.EnableNat("sleip0","eth0")==-77 && m.natMangleOwned_ && !m.natMangle6Owned_);
  IptablesWrapper::failFamily=0;assert(m.DisableNat("sleip0","eth0")==0);
+ assert(!m.natMangleOwned_ && !m.natMangle6Owned_);
+ // Real legacy main-state-machine caller supplies an empty downstream NAT holder.
+ assert(m.EnableNat("","wlan0")==0 && m.EnableNat("sleip0","wlan0")==0);
+ assert(m.DisableNat("sleip0","wlan0")==0);
+ assert(ruleContains(1,"nat","tetherctrl_nat_POSTROUTING","wlan0"));
+ assert(ruleContains(2,"nat","tetherctrl_nat_POSTROUTING","wlan0"));
+ assert(m.DisableNat("","wlan0")==0 && m.natPairs_.empty() && m.nat6Pairs_.empty());
+ assert(m.EnableNat("","")!=0);
+ // IPv6 NAT failure after IPv4 commit: preserve each family's actual holders.
+ IptablesWrapper::failFamily=2;IptablesWrapper::failTable="nat";
+ assert(m.EnableNat("sleip0","rmnet0")==-77 && m.natPairs_.size()==1 && m.nat6Pairs_.empty());
+ IptablesWrapper::failFamily=0;assert(m.EnableNat("sleip0","rmnet0")==0);
+ assert(m.EnableNat("sleip1","rmnet0")==0);
+ assert(m.DisableNat("sleip0","rmnet0")==0);
+ assert(ruleContains(2,"nat","tetherctrl_nat_POSTROUTING","-o rmnet0 -j MASQUERADE"));
+ IptablesWrapper::failFamily=2;IptablesWrapper::failTable="nat";
+ assert(m.DisableNat("sleip1","rmnet0")==-77 && m.natPairs_.empty() && m.nat6Pairs_.size()==1);
+ assert(m.EnableNat("sleip1","rmnet0")==-EBUSY);
+ // A different holder must not resurrect a pair whose removal only committed in IPv4.
+ IptablesWrapper::failFamily=0;assert(m.EnableNat("usb0","wlan0")==0);
+ assert(m.natPairs_.size()==1 && m.nat6Pairs_.size()==1);
+ assert(m.DisableNat("sleip1","rmnet0")==0);
+ assert(!ruleContains(2,"nat","tetherctrl_nat_POSTROUTING","rmnet0"));
+ assert(ruleContains(2,"nat","tetherctrl_nat_POSTROUTING","wlan0"));
+ assert(m.DisableNat("usb0","wlan0")==0);
+ assert(m.natPairs_.empty() && m.nat6Pairs_.empty());
+ assert(IptablesWrapper::tables[2]["nat"]["POSTROUTING"].empty());
  assert(!m.natMangleOwned_ && !m.natMangle6Owned_);
  assert(m.EnableNat("sleip0;bad","eth0")!=0);
  RouteManager::addError=-55;assert(m.IpfwdAddInterfaceForward("sleip0","eth0")==-55);
@@ -178,7 +206,7 @@ int main(){
  assert(files[IPV4_FORWARDING_PROC_FILE]=="1" && m.forwardingRequests_.count("legacy"));
  assert(!ruleContains(1,"filter","FORWARD","-i sleip+"));
  assert(m.IpDisableForwarding("legacy")==0 && files[IPV4_FORWARDING_PROC_FILE]=="0");
- puts("Base production: NAT holder sets, MSS partial cleanup, per-family forward commits, route failures, IPv4-only NAT, isolation, mixed legacy holders and zero residuals PASS");
+ puts("Base production: dual-family MASQUERADE holder sets, partial NAT retry/cleanup, MSS ownership, forward commits, route failures, isolation, mixed legacy holders and zero residuals PASS");
 }
 ''', encoding='utf-8')
     exe = out / 'test.exe'

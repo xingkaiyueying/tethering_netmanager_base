@@ -164,18 +164,14 @@ void SharingManager::InitChildChains()
     bool ready = true;
     for (auto family : {IPTYPE_IPV4, IPTYPE_IPV6}) {
         for (const auto &rule : {std::string(CREATE_TETHERCTRL_FORWARD), std::string(CREATE_TETHERCTRL_COUNTERS),
-                                 std::string(CREATE_TETHERCTRL_MANGLE_FORWARD)}) {
+                                 std::string(CREATE_TETHERCTRL_MANGLE_FORWARD),
+                                 std::string(CREATE_TETHERCTRL_NAT_POSTROUTING)}) {
             auto check = rule;
             check.replace(check.find("-N"), 2, "-S");
             bool exists = iptablesWrapper_->RunCheckedCommand(family, check) == 0;
             ready = (exists || iptablesWrapper_->RunCheckedCommand(family, rule) == 0) && ready;
         }
     }
-    std::string check = CREATE_TETHERCTRL_NAT_POSTROUTING;
-    check.replace(check.find("-N"), 2, "-S");
-    ready = (iptablesWrapper_->RunCheckedCommand(IPTYPE_IPV4, check) == 0 ||
-             iptablesWrapper_->RunCheckedCommand(IPTYPE_IPV4, CREATE_TETHERCTRL_NAT_POSTROUTING) == 0) &&
-            ready;
     inited_ = ready;
 }
 
@@ -238,13 +234,18 @@ int32_t SharingManager::ReconcileNatPairs(const std::set<std::pair<std::string, 
             return ret;
         owned = true;
     }
-    if (pairs != natPairs_) {
+    // P2 submitted MASQUERADE for both families. Keep that behavior with separate
+    // committed ledgers so a partial restore can be retried or released safely.
+    for (auto family : {IPTYPE_IPV4, IPTYPE_IPV6}) {
+        auto &committed = family == IPTYPE_IPV4 ? natPairs_ : nat6Pairs_;
+        if (pairs == committed)
+            continue;
         std::string cmds;
         CombineRestoreRules(NAT_TABLE, cmds);
         CombineRestoreRules(CLEAR_TETHERCTRL_NAT_POSTROUTING, cmds);
-        if (natPairs_.empty() && !pairs.empty())
+        if (committed.empty() && !pairs.empty())
             CombineRestoreRules(APPEND_NAT_POSTROUTING, cmds);
-        if (!natPairs_.empty() && pairs.empty())
+        if (!committed.empty() && pairs.empty())
             CombineRestoreRules(DELETE_TETHERCTRL_NAT_POSTROUTING, cmds);
         std::set<std::string> upstreams;
         for (const auto &pair : pairs)
@@ -252,10 +253,12 @@ int32_t SharingManager::ReconcileNatPairs(const std::set<std::pair<std::string, 
         for (const auto &upstream : upstreams)
             CombineRestoreRules(EnableNatCmd(upstream), cmds);
         CombineRestoreRules(CMD_COMMIT, cmds);
-        int32_t ret = iptablesWrapper_->RunCheckedCommand(IPTYPE_IPV4, cmds, true);
+        int32_t ret = iptablesWrapper_->RunCheckedCommand(family, cmds, true);
         if (ret != 0)
             return ret;
-        natPairs_ = pairs;
+        committed = pairs;
+        NETNATIVE_LOGI("[NearlinkIpShare][NatFamilies] family=%{public}d holders=%{public}zu upstreams=%{public}zu",
+                      static_cast<int>(family), committed.size(), upstreams.size());
     }
     for (auto family : {IPTYPE_IPV4, IPTYPE_IPV6}) {
         auto &owned = family == IPTYPE_IPV4 ? natMangleOwned_ : natMangle6Owned_;
@@ -278,11 +281,18 @@ int32_t SharingManager::ReconcileNatPairs(const std::set<std::pair<std::string, 
 int32_t SharingManager::EnableNat(const std::string &downstreamIface, const std::string &upstreamIface)
 {
     CheckInited();
-    if (!inited_ || downstreamIface == upstreamIface || !CommonUtils::CheckIfaceName(downstreamIface) ||
+    // Legacy NetworkShareMainStateMachine uses an empty downstream as its global NAT holder.
+    if (!inited_ || downstreamIface == upstreamIface ||
+        (!downstreamIface.empty() && !CommonUtils::CheckIfaceName(downstreamIface)) ||
         !CommonUtils::CheckIfaceName(upstreamIface))
         return -1;
     std::lock_guard<std::mutex> guard(natMutex_);
+    if (natRemoving_.count({downstreamIface, upstreamIface}))
+        return -EBUSY;
     auto pairs = natPairs_;
+    pairs.insert(nat6Pairs_.begin(), nat6Pairs_.end());
+    for (const auto &removing : natRemoving_)
+        pairs.erase(removing);
     pairs.insert({downstreamIface, upstreamIface});
     return ReconcileNatPairs(pairs);
 }
@@ -290,13 +300,21 @@ int32_t SharingManager::EnableNat(const std::string &downstreamIface, const std:
 int32_t SharingManager::DisableNat(const std::string &downstreamIface, const std::string &upstreamIface)
 {
     CheckInited();
-    if (!inited_ || downstreamIface == upstreamIface || !CommonUtils::CheckIfaceName(downstreamIface) ||
+    if (!inited_ || downstreamIface == upstreamIface ||
+        (!downstreamIface.empty() && !CommonUtils::CheckIfaceName(downstreamIface)) ||
         !CommonUtils::CheckIfaceName(upstreamIface))
         return -1;
     std::lock_guard<std::mutex> guard(natMutex_);
+    const auto key = std::make_pair(downstreamIface, upstreamIface);
+    natRemoving_.insert(key);
     auto pairs = natPairs_;
-    pairs.erase({downstreamIface, upstreamIface});
-    return ReconcileNatPairs(pairs);
+    pairs.insert(nat6Pairs_.begin(), nat6Pairs_.end());
+    for (const auto &removing : natRemoving_)
+        pairs.erase(removing);
+    int32_t ret = ReconcileNatPairs(pairs);
+    if (ret == 0)
+        natRemoving_.erase(key);
+    return ret;
 }
 int32_t SharingManager::SetIpv6PrivacyExtensions(const std::string &interfaceName, const uint32_t on)
 {

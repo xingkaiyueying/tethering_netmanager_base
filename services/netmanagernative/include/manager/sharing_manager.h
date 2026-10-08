@@ -117,7 +117,8 @@ private:
     std::mutex interfaceForwardsMutex_;
     std::mutex sharingOperationMutex_;
     std::mutex natMutex_;
-    std::set<std::pair<std::string, std::string>> natPairs_;
+    std::set<std::pair<std::string, std::string>> natPairs_, nat6Pairs_;
+    std::set<std::pair<std::string, std::string>> natRemoving_;
     bool natMangleOwned_{false}, natMangle6Owned_{false};
     std::set<std::string> forwardingRoutes_, forwardingRemoving_, forwarded4_, forwarded6_;
     std::set<std::string> forwardingRequests_;
