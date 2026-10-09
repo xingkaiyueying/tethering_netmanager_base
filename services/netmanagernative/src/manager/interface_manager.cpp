@@ -33,6 +33,7 @@
 
 #include "netlink_manager.h"
 #include "netlink_socket.h"
+#include "nearlink_interface_utils.h"
 #include "netlink_socket_diag.h"
 #include "net_manager_constants.h"
 #include "netmanager_base_common_utils.h"
@@ -250,7 +251,7 @@ int InterfaceManager::ModifyAddress(uint32_t action, const char *interfaceName, 
     NETNATIVE_LOGI("ModifyAddress:%{public}u %{public}s %{public}s %{public}d", action, interfaceName,
                    ToAnonymousIp(addr).c_str(), prefixLen);
 
-    if (std::strcmp(interfaceName, "sleip0") == 0) {
+    if (IsNearlinkInterface(interfaceName)) {
         return SendNetlinkMsgToKernelWithAck(nlmsg.GetNetLinkMessage());
     }
     return SendNetlinkMsgToKernel(nlmsg.GetNetLinkMessage());

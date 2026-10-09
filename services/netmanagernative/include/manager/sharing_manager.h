@@ -141,7 +141,6 @@ private:
     int32_t ReconcileNatPairs(const std::set<std::pair<std::string, std::string>> &pairs);
     int32_t SetNearlinkIsolation(bool enabled);
     int32_t ReconcileForwardPairs(const std::set<std::string> &pairs);
-    void IpfwdExecSaveBak();
     void InitChildChains();
     void CheckInited();
     int32_t SetIpFwdEnable();

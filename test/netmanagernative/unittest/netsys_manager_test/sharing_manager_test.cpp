@@ -571,16 +571,6 @@ HWTEST_F(SharingManagerTest, InitChildChains001, TestSize.Level1)
     EXPECT_TRUE(sharingManager->inited_);
 }
 
-// Tests for IpfwdExecSaveBak
-HWTEST_F(SharingManagerTest, IpfwdExecSaveBak001, TestSize.Level1)
-{
-    auto sharingManager = std::make_shared<SharingManager>();
-    // Call IpfwdExecSaveBak - should not crash
-    sharingManager->IpfwdExecSaveBak();
-    // No assertion needed, just verify it doesn't crash
-    SUCCEED();
-}
-
 // Tests for SetIpv6PrivacyExtensions
 HWTEST_F(SharingManagerTest, SetIpv6PrivacyExtensions001, TestSize.Level1)
 {

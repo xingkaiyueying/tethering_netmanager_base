@@ -21,6 +21,7 @@
 #include <mutex>
 #include <net/if.h>
 #include <netlink_socket.h>
+#include "nearlink_interface_utils.h"
 #include <sstream>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
@@ -159,7 +160,7 @@ int32_t RouteManager::AddRoute(TableType tableType, NetworkRouteInfo networkRout
     }
 
     int32_t ret = UpdateRouteRule(RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL, routeInfo);
-    if (interfaceName == "sleip0" && ret == -EEXIST) {
+    if (IsNearlinkInterface(interfaceName) && ret == -EEXIST) {
         routeRepeat = true;
         return 0;
     }
@@ -1634,7 +1635,7 @@ int32_t RouteManager::SendRouteToKernel(uint16_t action, uint16_t routeFlag, rtm
         }
     }
 
-    if (routeInfo.routeInterfaceName == "sleip0") {
+    if (IsNearlinkInterface(routeInfo.routeInterfaceName)) {
         return SendNetlinkMsgToKernelWithAck(nlmsg.GetNetLinkMessage());
     }
     return SendNetlinkMsgToKernel(nlmsg.GetNetLinkMessage());

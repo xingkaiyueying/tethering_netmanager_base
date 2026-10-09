@@ -33,9 +33,7 @@ using namespace NetManagerStandard;
 namespace {
 constexpr const char *IPV4_FORWARDING_PROC_FILE = "/proc/sys/net/ipv4/ip_forward";
 constexpr const char *IPV6_FORWARDING_PROC_FILE = "/proc/sys/net/ipv6/conf/all/forwarding";
-constexpr const char *IPTABLES_TMP_BAK = "/data/service/el1/public/netmanager/ipfwd.bak";
 constexpr const char *IPV6_PROC_PATH = "/proc/sys/net/ipv6/conf/";
-constexpr const char *IP6TABLES_TMP_BAK = "/data/service/el1/public/netmanager/ip6fwd.bak";
 constexpr const int MAX_MATCH_SIZE = 4;
 constexpr const int TWO_LIST_CORRECT_DATA = 2;
 constexpr const int NEXT_LIST_CORRECT_DATA = 1;
@@ -72,12 +70,6 @@ constexpr const char *CLEAR_TETHERCTRL_NAT_POSTROUTING = "-F tetherctrl_nat_POST
 constexpr const char *CLEAR_TETHERCTRL_MANGLE_FORWARD = "-F tetherctrl_mangle_FORWARD";
 constexpr const char *DELETE_TETHERCTRL_NAT_POSTROUTING = "-D POSTROUTING -j tetherctrl_nat_POSTROUTING";
 constexpr const char *DELETE_TETHERCTRL_MANGLE_FORWARD = "-D FORWARD -j tetherctrl_mangle_FORWARD";
-
-constexpr const char *IPATBLES_RESTORE_CMD_PATH = "/system/bin/iptables-restore";
-constexpr const char *IPATBLES_SAVE_CMD_PATH = "/system/bin/iptables-save";
-
-constexpr const char *IP6ATBLES_RESTORE_CMD_PATH = "/system/bin/ip6tables-restore";
-constexpr const char *IP6ATBLES_SAVE_CMD_PATH = "/system/bin/ip6tables-save";
 
 constexpr const char *FILTER_TABLE = "*filter";
 constexpr const char *MANGLE_TABLE = "*mangle";
@@ -141,17 +133,6 @@ bool WriteToFile(const char *fileName, const char *value)
     return true;
 }
 
-void Rollback()
-{
-    NETNATIVE_LOGE("iptables rollback");
-    std::string rollBak = std::string(IPATBLES_RESTORE_CMD_PATH) + " -T filter < ";
-    rollBak.append(IPTABLES_TMP_BAK);
-    CommonUtils::ForkExec(rollBak);
-
-    rollBak = std::string(IP6ATBLES_RESTORE_CMD_PATH) + " -T filter < ";
-    rollBak.append(IP6TABLES_TMP_BAK);
-    CommonUtils::ForkExec(rollBak);
-}
 } // namespace
 
 SharingManager::SharingManager()
@@ -362,16 +343,6 @@ int32_t SharingManager::SetIpFwdEnable()
     return (ipv4Success && ipv6Success) ? 0 : -1;
 }
 
-void SharingManager::IpfwdExecSaveBak()
-{
-    std::string saveBak = std::string(IPATBLES_SAVE_CMD_PATH) + " -t filter > ";
-    saveBak.append(IPTABLES_TMP_BAK);
-    CommonUtils::ForkExec(saveBak);
-    saveBak = std::string(IP6ATBLES_SAVE_CMD_PATH) + " -t filter > ";
-    saveBak.append(IP6TABLES_TMP_BAK);
-    CommonUtils::ForkExec(saveBak);
-}
-
 int32_t SharingManager::ReconcileForwardPairs(const std::set<std::string> &pairs)
 {
     for (auto family : {IPTYPE_IPV4, IPTYPE_IPV6}) {
@@ -381,7 +352,6 @@ int32_t SharingManager::ReconcileForwardPairs(const std::set<std::string> &pairs
         std::string cmds;
         CombineRestoreRules(FILTER_TABLE, cmds);
         CombineRestoreRules("-F tetherctrl_FORWARD", cmds);
-        CombineRestoreRules("-F tetherctrl_counters", cmds);
         if (committed.empty() && !pairs.empty())
             SetForwardRules(true, FORWARD_JUMP_TETHERCTRL_FORWARD, cmds);
         if (!committed.empty() && pairs.empty())
@@ -392,6 +362,23 @@ int32_t SharingManager::ReconcileForwardPairs(const std::set<std::string> &pairs
             SetForwardRules(true, SetTetherctrlForward1(to, from), cmds);
             SetForwardRules(true, SetTetherctrlForward2(to, from), cmds);
             SetForwardRules(true, SetTetherctrlForward3(to, from), cmds);
+        }
+        // Keep counters for unchanged pairs: restore --noflush preserves their values.
+        for (const auto &key : committed) {
+            if (pairs.count(key) != 0) {
+                continue;
+            }
+            auto split = key.find(':');
+            auto from = key.substr(0, split), to = key.substr(split + 1);
+            SetForwardRules(false, SetTetherctrlCounters1(from, to), cmds);
+            SetForwardRules(false, SetTetherctrlCounters2(from, to), cmds);
+        }
+        for (const auto &key : pairs) {
+            if (committed.count(key) != 0) {
+                continue;
+            }
+            auto split = key.find(':');
+            auto from = key.substr(0, split), to = key.substr(split + 1);
             SetForwardRules(true, SetTetherctrlCounters1(from, to), cmds);
             SetForwardRules(true, SetTetherctrlCounters2(from, to), cmds);
         }

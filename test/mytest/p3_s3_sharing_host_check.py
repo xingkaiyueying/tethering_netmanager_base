@@ -9,7 +9,7 @@ production = (source / 'src/manager/sharing_manager.cpp').read_text(encoding='ut
 constants = production[production.index('constexpr const char *IPV4_FORWARDING'):production.index('bool WriteToFile(')]
 init_nat = production[production.index('void SharingManager::InitChildChains()'):production.index('int32_t SharingManager::SetIpv6PrivacyExtensions(')]
 forward = production[production.index('int32_t SharingManager::ReconcileForwardPairs('):production.index('int32_t SharingManager::GetNetworkSharingTraffic(')]
-sysctl = production[production.index('int32_t SharingManager::SetIpFwdEnable()'):production.index('void SharingManager::IpfwdExecSaveBak()')]
+sysctl = production[production.index('int32_t SharingManager::SetIpFwdEnable()'):production.index('int32_t SharingManager::ReconcileForwardPairs(')]
 utility = production[production.index('void SharingManager::CheckInited()'):production.index('int32_t SharingManager::EnableShareUnreachableRoute(')]
 with tempfile.TemporaryDirectory(prefix='p3-s3-sharing-') as directory:
     out = Path(directory)
@@ -51,6 +51,7 @@ struct CommonUtils {static bool CheckIfaceName(const std::string &s){
 class IptablesWrapper {public:
  using Chains=std::map<std::string,std::vector<std::string>>;
  inline static std::map<int,std::map<std::string,Chains>> tables;
+ inline static std::map<int,std::map<std::string,uint64_t>> counters;
  inline static int failFamily=0;inline static std::string failTable;
  inline static std::vector<std::pair<int,std::string>> commands;
  static std::shared_ptr<IptablesWrapper> &GetInstance(){static auto w=std::make_shared<IptablesWrapper>();return w;}
@@ -69,15 +70,15 @@ class IptablesWrapper {public:
    assert(false);
   }
   std::istringstream in(s);std::string line,table;std::getline(in,line);assert(line[0]=='*');table=line.substr(1);
-  auto next=tables[family][table];
+  auto next=tables[family][table];auto nextCounters=counters[family];
   while(std::getline(in,line)){
-   if(line=="COMMIT"){tables[family][table]=next;return 0;}
+   if(line=="COMMIT"){tables[family][table]=next;counters[family]=nextCounters;return 0;}
    std::istringstream command(line);std::string op,chain;command>>op>>chain;
    auto &rules=next[chain];std::string rule;std::getline(command,rule);
-   if(op=="-F"){rules.clear();continue;}
+   if(op=="-F"){rules.clear();if(chain=="tetherctrl_counters")nextCounters.clear();continue;}
    auto i=std::find(rules.begin(),rules.end(),rule);
-   if(op=="-D"){if(i==rules.end())return -3;rules.erase(i);}
-   else if(op=="-A"){if(i!=rules.end())return -4;rules.push_back(rule);}
+   if(op=="-D"){if(i==rules.end())return -3;rules.erase(i);if(chain=="tetherctrl_counters")nextCounters.erase(rule);}
+   else if(op=="-A"){if(i!=rules.end())return -4;rules.push_back(rule);if(chain=="tetherctrl_counters")nextCounters[rule]=0;}
    else assert(false);
   }
   assert(false);return -5;
@@ -175,6 +176,12 @@ int main(){
  RouteManager::addError=-55;assert(m.IpfwdAddInterfaceForward("sleip0","eth0")==-55);
  assert(m.interfaceForwards_.empty());RouteManager::addError=0;
  assert(m.IpfwdAddInterfaceForward("sleip0","eth0")==0);
+ const std::string counterA=" -i sleip0 -o eth0 -j RETURN";
+ IptablesWrapper::counters[1][counterA]=12345;IptablesWrapper::counters[2][counterA]=67890;
+ assert(m.IpfwdAddInterfaceForward("sleip1","eth0")==0);
+ assert(IptablesWrapper::counters[1][counterA]==12345 && IptablesWrapper::counters[2][counterA]==67890);
+ assert(m.IpfwdRemoveInterfaceForward("sleip1","eth0")==0);
+ assert(IptablesWrapper::counters[1][counterA]==12345 && IptablesWrapper::counters[2][counterA]==67890);
  assert(m.IpfwdAddInterfaceForward("sleip1","eth0")==0);
  assert(m.IpfwdAddInterfaceForward("usb0","eth0")==0);
  assert(m.IpfwdAddInterfaceForward("sleip0","eth0")==0);
