@@ -31,6 +31,7 @@
 
 #include "dns_config_client.h"
 #include "dns_param_cache.h"
+#include "fwmark_client.h"
 #include "netnative_log_wrapper.h"
 #include "netsys_udp_transfer.h"
 #include "singleton.h"
@@ -40,13 +41,12 @@
 
 namespace OHOS {
 namespace nmd {
-uint16_t DnsProxyListen::netId_ = 0;
+std::atomic<uint16_t> DnsProxyListen::netId_{0};
 std::atomic_bool DnsProxyListen::proxyListenSwitch_ = false;
 std::mutex DnsProxyListen::listenerMutex_;
 constexpr uint16_t DNS_PROXY_PORT = 53;
 constexpr uint8_t RESPONSE_FLAG = 0x80;
 constexpr uint8_t RESPONSE_FLAG_USED = 80;
-constexpr size_t FLAG_BUFF_LEN = 1;
 constexpr size_t FLAG_BUFF_OFFSET = 2;
 constexpr size_t DNS_HEAD_LENGTH = 12;
 constexpr int32_t EPOLL_TASK_NUMBER = 10;
@@ -165,6 +165,10 @@ DnsProxyListen::~DnsProxyListen()
 
 void DnsProxyListen::DnsParseBySocket(std::unique_ptr<RecvBuff> &recvBuff, std::unique_ptr<AlignedSockAddr> &clientSock)
 {
+    recvBuff->upstreamNetId = netId_.load();
+    if (!GetDnsProxyServers(recvBuff->upstreamServers, 0, recvBuff->upstreamNetId)) {
+        return;
+    }
     int32_t socketFd = -1;
     if (clientSock->sa.sa_family == AF_INET) {
         socketFd = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK, IPPROTO_UDP);
@@ -173,6 +177,14 @@ void DnsProxyListen::DnsParseBySocket(std::unique_ptr<RecvBuff> &recvBuff, std::
     }
     if (socketFd < 0) {
         NETNATIVE_LOGE("socketFd create socket failed %{public}d", errno);
+        return;
+    }
+    int32_t bindRet = FwmarkClient().BindSocket(socketFd, recvBuff->upstreamNetId);
+    if (bindRet != 0) {
+        NETNATIVE_LOGE("[NearlinkIpShare][DnsUpstream] netId=%{public}u family=%{public}d "
+                      "ifindex=%{public}d stage=BIND code=%{public}d", recvBuff->upstreamNetId,
+                      clientSock->sa.sa_family, recvBuff->replyIfindex, bindRet);
+        close(socketFd);
         return;
     }
     if (!PollUdpDataTransfer::MakeUdpNonBlock(socketFd)) {
@@ -185,12 +197,12 @@ void DnsProxyListen::DnsParseBySocket(std::unique_ptr<RecvBuff> &recvBuff, std::
     SendRequest2Server(socketFd);
 }
 
-bool DnsProxyListen::GetDnsProxyServers(std::vector<std::string> &servers, size_t serverIdx)
+bool DnsProxyListen::GetDnsProxyServers(std::vector<std::string> &servers, size_t serverIdx, uint16_t netId)
 {
     std::vector<std::string> domains;
     uint16_t baseTimeoutMsec;
     uint8_t retryCount;
-    DnsParamCache::GetInstance().GetResolverConfig(DnsProxyListen::netId_, servers, domains, baseTimeoutMsec,
+    DnsParamCache::GetInstance().GetResolverConfig(netId, servers, domains, baseTimeoutMsec,
                                                    retryCount);
     if (serverIdx >= servers.size()) {
         NETNATIVE_LOGE("no server useful");
@@ -241,14 +253,19 @@ void DnsProxyListen::SendRequest2Server(int32_t socketFd)
         return;
     }
     auto serverIdx = iter->second.GetIdx();
-    std::vector<std::string> servers;
-    if (!GetDnsProxyServers(servers, serverIdx)) {
+    auto &request = iter->second.GetRecvBuff();
+    auto &servers = request.upstreamServers;
+    if (serverIdx >= servers.size()) {
+        NETNATIVE_LOGE("no server useful");
+        NETNATIVE_LOGE("[NearlinkIpShare][DnsUpstream] netId=%{public}u family=%{public}d "
+                      "ifindex=%{public}d stage=EXHAUSTED servers=%{public}zu", request.upstreamNetId,
+                      iter->second.GetClientSock().sa.sa_family, request.replyIfindex, servers.size());
         serverIdxOfSocket.erase(iter);
         return;
     }
     iter->second.IncreaseIdx();
     epoll_ctl(epollFd_, EPOLL_CTL_DEL, socketFd, nullptr);
-    socklen_t addrLen;
+    socklen_t addrLen = 0;
     AlignedSockAddr &addrParse = iter->second.GetAddr();
     AlignedSockAddr &clientSock = iter->second.GetClientSock();
     if (clientSock.sin.sin_addr.s_addr == EPOLL_LOOP_ADDR) {
@@ -301,8 +318,10 @@ void DnsProxyListen::SendDnsBack2Client(int32_t socketFd)
         if (request.replyIfindex > 0) {
             int32_t sent = SendDnsReply(proxySocket, requesData, resLen, clientSock, request);
             NETNATIVE_LOGI("[NearlinkIpShare][DnsReply] family=%{public}d ifindex=%{public}d "
-                           "bytes=%{public}d code=%{public}d", clientSock.sa.sa_family, request.replyIfindex,
-                           sent, sent == resLen ? 0 : errno);
+                           "bytes=%{public}d code=%{public}d netId=%{public}u id=%{public}u rcode=%{public}u",
+                           clientSock.sa.sa_family, request.replyIfindex, sent, sent == resLen ? 0 : errno,
+                           request.upstreamNetId, (static_cast<uint8_t>(requesData[0]) << 8) |
+                           static_cast<uint8_t>(requesData[1]), static_cast<uint8_t>(requesData[3]) & 0x0f);
         } else {
             DnsSendRecvParseData(proxySocket, requesData, resLen, clientSock);
         }
@@ -609,7 +628,7 @@ bool DnsProxyListen::CheckDnsQuestion(char *recBuff, size_t recLen)
 
 bool DnsProxyListen::CheckDnsResponse(char *recBuff, size_t recLen)
 {
-    if (recLen < FLAG_BUFF_LEN + FLAG_BUFF_OFFSET) {
+    if (recLen < DNS_HEAD_LENGTH) {
         return false;
     }
     char *recFlagBuff = recBuff + FLAG_BUFF_OFFSET;
@@ -648,7 +667,7 @@ void DnsProxyListen::OffListen()
 
 void DnsProxyListen::SetParseNetId(uint16_t netId)
 {
-    DnsProxyListen::netId_ = netId;
+    DnsProxyListen::netId_.store(netId);
     NETNATIVE_LOGI("SetParseNetId");
 }
 

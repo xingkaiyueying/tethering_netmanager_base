@@ -47,6 +47,7 @@ with tempfile.TemporaryDirectory(prefix='p3-s3-dns-reply-') as directory:
 #include <map>
 #include <memory>
 #include <vector>
+#include <string>
 constexpr int AF_INET=2,AF_INET6=10,IPPROTO_IP=0,IPPROTO_IPV6=41,IP_PKTINFO=8,IPV6_PKTINFO=50;
 constexpr int MSG_TRUNC=0x20,MSG_CTRUNC=8;
 struct in_addr {uint32_t s_addr;};
@@ -73,7 +74,8 @@ inline cmsghdr *next(msghdr*m,cmsghdr*h){auto p=reinterpret_cast<char*>(h)+align
 #define CMSG_NXTHDR(m,h) next(m,h)
 constexpr size_t MAX_REQUESTDATA_LEN=512,DNS_HEAD_LENGTH=12,FLAG_BUFF_LEN=1,FLAG_BUFF_OFFSET=2;
 constexpr uint8_t RESPONSE_FLAG=0x80,RESPONSE_FLAG_USED=80;
-struct RecvBuff {char questionsBuff[512]{};int questionLen=0,replyIfindex=0;AlignedSockAddr replyAddress{};};
+struct RecvBuff {char questionsBuff[512]{};int questionLen=0,replyIfindex=0;AlignedSockAddr replyAddress{};
+ uint16_t upstreamNetId=0;std::vector<std::string> upstreamServers;};
 struct Pending {int family,index;uint32_t local;unsigned short port;};
 inline Pending pending{};inline int flags=0,receiveLength=12;inline bool missing=false,shortInfo=false,interruptReceive=false,interruptSend=false,failSend=false;
 inline int legacySends=0,markedSends=0;inline std::vector<Pending> replies;

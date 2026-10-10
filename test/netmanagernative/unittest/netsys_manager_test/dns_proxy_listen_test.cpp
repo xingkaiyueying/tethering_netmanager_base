@@ -100,10 +100,10 @@ HWTEST_F(DnsProxyListenTest, GetDnsProxyServersTest01, TestSize.Level1)
     std::vector<std::string> servers = {"servers"};
     size_t serverIdx = 1;
 
-    bool ret = instance_->GetDnsProxyServers(servers, serverIdx);
+    bool ret = instance_->GetDnsProxyServers(servers, serverIdx, 0);
     EXPECT_FALSE(ret);
     serverIdx = 0;
-    ret = instance_->GetDnsProxyServers(servers, serverIdx);
+    ret = instance_->GetDnsProxyServers(servers, serverIdx, 0);
     EXPECT_TRUE(ret);
 }
 
