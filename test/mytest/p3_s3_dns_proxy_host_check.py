@@ -120,6 +120,9 @@ struct DnsProxyListen {int proxySockFd_=4,proxySockFd6_=6;std::map<int,Request> 
  void SendRequest2Server(int){assert(false);}};
 ''' + helpers + '\n' + production + r'''
 int main(){
+ char shortResponse[12]{};shortResponse[2]=char(0x80);
+ assert(!DnsProxyListen::CheckDnsResponse(shortResponse,3));
+ assert(DnsProxyListen::CheckDnsResponse(shortResponse,12));
  DnsProxyListen d;
  for(int family:{AF_INET,AF_INET6}){
   pending={family,56,10,1001};interruptReceive=true;d.GetRequestAndTransmit(family);int firstId=d.serial;

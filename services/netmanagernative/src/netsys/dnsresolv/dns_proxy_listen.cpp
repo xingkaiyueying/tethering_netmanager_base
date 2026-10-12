@@ -166,6 +166,13 @@ DnsProxyListen::~DnsProxyListen()
 void DnsProxyListen::DnsParseBySocket(std::unique_ptr<RecvBuff> &recvBuff, std::unique_ptr<AlignedSockAddr> &clientSock)
 {
     recvBuff->upstreamNetId = netId_.load();
+    if (recvBuff->upstreamNetId == 0) {
+        int32_t defaultNetId = DnsParamCache::GetInstance().GetDefaultNetwork();
+        if (defaultNetId <= 0 || defaultNetId > UINT16_MAX) {
+            return;
+        }
+        recvBuff->upstreamNetId = static_cast<uint16_t>(defaultNetId);
+    }
     if (!GetDnsProxyServers(recvBuff->upstreamServers, 0, recvBuff->upstreamNetId)) {
         return;
     }
@@ -257,9 +264,6 @@ void DnsProxyListen::SendRequest2Server(int32_t socketFd)
     auto &servers = request.upstreamServers;
     if (serverIdx >= servers.size()) {
         NETNATIVE_LOGE("no server useful");
-        NETNATIVE_LOGE("[NearlinkIpShare][DnsUpstream] netId=%{public}u family=%{public}d "
-                      "ifindex=%{public}d stage=EXHAUSTED servers=%{public}zu", request.upstreamNetId,
-                      iter->second.GetClientSock().sa.sa_family, request.replyIfindex, servers.size());
         serverIdxOfSocket.erase(iter);
         return;
     }
@@ -318,10 +322,8 @@ void DnsProxyListen::SendDnsBack2Client(int32_t socketFd)
         if (request.replyIfindex > 0) {
             int32_t sent = SendDnsReply(proxySocket, requesData, resLen, clientSock, request);
             NETNATIVE_LOGI("[NearlinkIpShare][DnsReply] family=%{public}d ifindex=%{public}d "
-                           "bytes=%{public}d code=%{public}d netId=%{public}u id=%{public}u rcode=%{public}u",
-                           clientSock.sa.sa_family, request.replyIfindex, sent, sent == resLen ? 0 : errno,
-                           request.upstreamNetId, (static_cast<uint8_t>(requesData[0]) << 8) |
-                           static_cast<uint8_t>(requesData[1]), static_cast<uint8_t>(requesData[3]) & 0x0f);
+                           "bytes=%{public}d code=%{public}d", clientSock.sa.sa_family, request.replyIfindex,
+                           sent, sent == resLen ? 0 : errno);
         } else {
             DnsSendRecvParseData(proxySocket, requesData, resLen, clientSock);
         }

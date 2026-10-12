@@ -66,12 +66,14 @@ struct DnsProxyListen {static inline std::atomic<uint16_t> netId_{101};
  void SendRequest2Server(int);};
 inline int nextFd=10,bindError=0,configCalls=0,sendCalls=0,closes=0,wrongRouteSends=0;
 inline bool emptyConfig=false,nonblock=true,switchDuringConfig=false;
+inline int32_t defaultNetId=101;
 inline std::map<int,uint16_t> marks;
 inline std::vector<uint16_t> sentNetIds;
 inline int Socket(int,int,int){return ++nextFd;}
 inline int Close(int){++closes;return 0;}
 struct FwmarkClient {int BindSocket(int fd,uint32_t id){if(bindError)return bindError;marks[fd]=id;return 0;}};
 struct DnsParamCache {static DnsParamCache &GetInstance(){static DnsParamCache c;return c;}
+ int32_t GetDefaultNetwork(){return defaultNetId;}
  void GetResolverConfig(uint16_t id,std::vector<std::string>&servers,std::vector<std::string>&,
  uint16_t&,uint8_t&){++configCalls;
  if(!emptyConfig)servers=id==101?std::vector<std::string>{"192.0.2.53","192.0.2.54","2001:db8::53","2001:db8::54"}:
@@ -106,6 +108,14 @@ int main(){
   assert(sentNetIds.back()==101);
   d.serverIdxOfSocket.clear();
  }
+ DnsProxyListen::netId_=0;switchDuringConfig=true;start(AF_INET);
+ assert(d.serverIdxOfSocket.size()==1 && "Default DNS requests must capture the actual default netId");
+ assert(d.serverIdxOfSocket.begin()->second.GetRecvBuff().upstreamNetId==101);
+ assert(sentNetIds.back()==101);d.serverIdxOfSocket.clear();
+ switchDuringConfig=false;DnsProxyListen::netId_=0;defaultNetId=0;
+ int allocatedZero=nextFd;start(AF_INET);assert(nextFd==allocatedZero&&d.serverIdxOfSocket.empty());
+ defaultNetId=70000;start(AF_INET6);assert(nextFd==allocatedZero&&d.serverIdxOfSocket.empty());
+ defaultNetId=101;
  switchDuringConfig=false;DnsProxyListen::netId_=101;
  bindError=-13;int sends=sendCalls,closed=closes;start(AF_INET);
  assert(sendCalls==sends&&closes==closed+1&&d.serverIdxOfSocket.empty());
@@ -113,7 +123,7 @@ int main(){
  assert(sendCalls==sends&&closes==closed+1&&d.serverIdxOfSocket.empty());
  nonblock=true;emptyConfig=true;int allocated=nextFd;start(AF_INET);
  assert(nextFd==allocated&&d.serverIdxOfSocket.empty());
- puts("DNS production forwarding: adverse default route, IPv4/IPv6 selected-netId binding, concurrent uplink switch, per-request retry snapshot, bind/setup failure without unbound fallback PASS");
+ puts("DNS production forwarding: selected/default netId capture, IPv4/IPv6 binding, concurrent uplink switch, retry snapshot, unavailable default, bind/setup failure without unbound fallback PASS");
 }
 ''', encoding='utf-8')
     exe = out / 'test.exe'
