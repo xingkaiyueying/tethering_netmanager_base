@@ -86,8 +86,8 @@ int32_t ReceiveDnsRequest(int32_t fd, RecvBuff &buffer, AlignedSockAddr &client,
             buffer.replyIfindex = info.ipi_ifindex;
             buffer.replyAddress.sin.sin_family = AF_INET;
             buffer.replyAddress.sin.sin_addr = info.ipi_addr;
-        } else if (family == AF_INET6 && header->cmsg_level == IPPROTO_IPV6 &&
-                   header->cmsg_type == IPV6_PKTINFO && header->cmsg_len >= CMSG_LEN(sizeof(in6_pktinfo))) {
+        } else if (family == AF_INET6 && header->cmsg_level == IPPROTO_IPV6 && header->cmsg_type == IPV6_PKTINFO &&
+                   header->cmsg_len >= CMSG_LEN(sizeof(in6_pktinfo))) {
             in6_pktinfo info{};
             memcpy(&info, CMSG_DATA(header), sizeof(info));
             buffer.replyIfindex = info.ipi6_ifindex;
@@ -113,8 +113,8 @@ int32_t SendDnsReply(int32_t fd, char *response, int32_t length, AlignedSockAddr
     message.msg_iov = &data;
     message.msg_iovlen = 1;
     message.msg_control = control.data();
-    message.msg_controllen = client.sa.sa_family == AF_INET ? CMSG_SPACE(sizeof(in_pktinfo))
-                                                          : CMSG_SPACE(sizeof(in6_pktinfo));
+    message.msg_controllen =
+        client.sa.sa_family == AF_INET ? CMSG_SPACE(sizeof(in_pktinfo)) : CMSG_SPACE(sizeof(in6_pktinfo));
     auto header = CMSG_FIRSTHDR(&message);
     if (client.sa.sa_family == AF_INET) {
         header->cmsg_level = IPPROTO_IP;
@@ -188,9 +188,10 @@ void DnsProxyListen::DnsParseBySocket(std::unique_ptr<RecvBuff> &recvBuff, std::
     }
     int32_t bindRet = FwmarkClient().BindSocket(socketFd, recvBuff->upstreamNetId);
     if (bindRet != 0) {
-        NETNATIVE_LOGE("[NearlinkIpShare][DnsUpstream] netId=%{public}u family=%{public}d "
-                      "ifindex=%{public}d stage=BIND code=%{public}d", recvBuff->upstreamNetId,
-                      clientSock->sa.sa_family, recvBuff->replyIfindex, bindRet);
+        NETNATIVE_LOGE(
+            "[NearlinkIpShare][DnsUpstream] netId=%{public}u family=%{public}d "
+            "ifindex=%{public}d stage=BIND code=%{public}d",
+            recvBuff->upstreamNetId, clientSock->sa.sa_family, recvBuff->replyIfindex, bindRet);
         close(socketFd);
         return;
     }
@@ -209,8 +210,7 @@ bool DnsProxyListen::GetDnsProxyServers(std::vector<std::string> &servers, size_
     std::vector<std::string> domains;
     uint16_t baseTimeoutMsec;
     uint8_t retryCount;
-    DnsParamCache::GetInstance().GetResolverConfig(netId, servers, domains, baseTimeoutMsec,
-                                                   retryCount);
+    DnsParamCache::GetInstance().GetResolverConfig(netId, servers, domains, baseTimeoutMsec, retryCount);
     if (serverIdx >= servers.size()) {
         NETNATIVE_LOGE("no server useful");
         return false;
@@ -321,9 +321,12 @@ void DnsProxyListen::SendDnsBack2Client(int32_t socketFd)
         const auto &request = iter->second.GetRecvBuff();
         if (request.replyIfindex > 0) {
             int32_t sent = SendDnsReply(proxySocket, requesData, resLen, clientSock, request);
-            NETNATIVE_LOGI("[NearlinkIpShare][DnsReply] family=%{public}d ifindex=%{public}d "
-                           "bytes=%{public}d code=%{public}d", clientSock.sa.sa_family, request.replyIfindex,
-                           sent, sent == resLen ? 0 : errno);
+            if (sent != resLen) {
+                NETNATIVE_LOGE(
+                    "[NearlinkIpShare][DnsReply] failed family=%{public}d ifindex=%{public}d "
+                    "bytes=%{public}d code=%{public}d",
+                    clientSock.sa.sa_family, request.replyIfindex, sent, errno);
+            }
         } else {
             DnsSendRecvParseData(proxySocket, requesData, resLen, clientSock);
         }
@@ -408,8 +411,8 @@ void DnsProxyListen::GetRequestAndTransmit(int32_t family)
         return;
     }
 
-    recvBuff->questionLen = ReceiveDnsRequest(family == AF_INET ? proxySockFd_ : proxySockFd6_,
-                                             *recvBuff, *clientAddr, family);
+    recvBuff->questionLen =
+        ReceiveDnsRequest(family == AF_INET ? proxySockFd_ : proxySockFd6_, *recvBuff, *clientAddr, family);
     if (recvBuff->questionLen <= 0) {
         NETNATIVE_LOGE("read errno %{public}d", errno);
         return;

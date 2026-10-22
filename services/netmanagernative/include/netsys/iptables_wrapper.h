@@ -79,7 +79,7 @@ public:
     // Internal sharing ledger API: wait for the queue and return the actual child exit status.
     int32_t RunCheckedCommand(const IpType &ipType, const std::string &command, bool restore = false);
 
-  private:
+private:
     void ExecuteCommand(const std::string &command);
     void ExecuteCommandForRes(const std::string &command);
     void ExecuteCommandForTraffic(const std::string &command);

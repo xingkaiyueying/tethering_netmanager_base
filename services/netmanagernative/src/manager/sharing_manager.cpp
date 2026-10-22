@@ -144,9 +144,9 @@ void SharingManager::InitChildChains()
 {
     bool ready = true;
     for (auto family : {IPTYPE_IPV4, IPTYPE_IPV6}) {
-        for (const auto &rule : {std::string(CREATE_TETHERCTRL_FORWARD), std::string(CREATE_TETHERCTRL_COUNTERS),
-                                 std::string(CREATE_TETHERCTRL_MANGLE_FORWARD),
-                                 std::string(CREATE_TETHERCTRL_NAT_POSTROUTING)}) {
+        for (const auto &rule :
+             {std::string(CREATE_TETHERCTRL_FORWARD), std::string(CREATE_TETHERCTRL_COUNTERS),
+              std::string(CREATE_TETHERCTRL_MANGLE_FORWARD), std::string(CREATE_TETHERCTRL_NAT_POSTROUTING)}) {
             auto check = rule;
             check.replace(check.find("-N"), 2, "-S");
             bool exists = iptablesWrapper_->RunCheckedCommand(family, check) == 0;
@@ -239,7 +239,7 @@ int32_t SharingManager::ReconcileNatPairs(const std::set<std::pair<std::string, 
             return ret;
         committed = pairs;
         NETNATIVE_LOGI("[NearlinkIpShare][NatFamilies] family=%{public}d holders=%{public}zu upstreams=%{public}zu",
-                      static_cast<int>(family), committed.size(), upstreams.size());
+                       static_cast<int>(family), committed.size(), upstreams.size());
     }
     for (auto family : {IPTYPE_IPV4, IPTYPE_IPV6}) {
         auto &owned = family == IPTYPE_IPV4 ? natMangleOwned_ : natMangle6Owned_;

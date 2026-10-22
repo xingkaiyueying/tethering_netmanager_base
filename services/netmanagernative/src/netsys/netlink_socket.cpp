@@ -116,23 +116,22 @@ int32_t SendNetlinkMsgToKernelWithAck(nlmsghdr *msg)
     if (fd < 0) {
         return -errno;
     }
-    timeval timeout {1, 0};
+    timeval timeout{1, 0};
     int32_t result = -EIO;
     msg->nlmsg_flags |= NLM_F_ACK;
     if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
         result = -errno;
     } else if (SendMsgToKernel(msg, fd) == static_cast<ssize_t>(msg->nlmsg_len)) {
-        alignas(nlmsghdr) char buffer[KERNEL_BUFFER_SIZE] {};
-        sockaddr_nl sender {};
+        alignas(nlmsghdr) char buffer[KERNEL_BUFFER_SIZE]{};
+        sockaddr_nl sender{};
         socklen_t senderLength = sizeof(sender);
-        ssize_t size = recvfrom(fd, buffer, sizeof(buffer), 0,
-            reinterpret_cast<sockaddr *>(&sender), &senderLength);
+        ssize_t size = recvfrom(fd, buffer, sizeof(buffer), 0, reinterpret_cast<sockaddr *>(&sender), &senderLength);
         if (size < 0) {
             result = -errno;
         } else if (senderLength == sizeof(sender) && sender.nl_pid == 0) {
             int32_t remaining = static_cast<int32_t>(size);
             for (auto *reply = reinterpret_cast<nlmsghdr *>(buffer); NLMSG_OK(reply, remaining);
-                reply = NLMSG_NEXT(reply, remaining)) {
+                 reply = NLMSG_NEXT(reply, remaining)) {
                 if (reply->nlmsg_seq == msg->nlmsg_seq && reply->nlmsg_type == NLMSG_ERROR &&
                     reply->nlmsg_len >= NLMSG_LENGTH(sizeof(nlmsgerr))) {
                     result = reinterpret_cast<nlmsgerr *>(NLMSG_DATA(reply))->error;
