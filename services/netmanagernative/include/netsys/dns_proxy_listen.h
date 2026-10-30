@@ -17,6 +17,7 @@
 #define INCLUDE_DNS_PROXY_LISTEN_H
 
 #include <iostream>
+#include <atomic>
 #include <mutex>
 #include <netinet/in.h>
 #include <vector>
@@ -93,14 +94,14 @@ private:
     void SendDnsBack2Client(int32_t socketFd);
     void clearResource();
     void SendRequest2Server(int32_t socketFd);
-    bool GetDnsProxyServers(std::vector<std::string> &servers, size_t serverIdx);
+    bool GetDnsProxyServers(std::vector<std::string> &servers, size_t serverIdx, uint16_t netId);
     bool MakeAddrInfo(std::vector<std::string> &servers, size_t serverIdx, AlignedSockAddr &addrParse,
                       AlignedSockAddr &clientSock);
     int32_t proxySockFd_;
     int32_t proxySockFd6_;
     int32_t epollFd_ = -1;
     int32_t exitFd_ = -1;
-    static uint16_t netId_;
+    static std::atomic<uint16_t> netId_;
     static std::atomic_bool proxyListenSwitch_;
     static std::mutex listenerMutex_;
     DnsSocketHolder serverIdxOfSocket;

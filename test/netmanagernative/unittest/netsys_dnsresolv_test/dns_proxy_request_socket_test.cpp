@@ -109,7 +109,7 @@ HWTEST_F(DnsProxyRequestSocketTest, GetDnsProxyServers001, TestSize.Level0)
     DnsProxyListen dnsproxylisten;
     std::vector<std::string> servers = {"1", "2"};
     size_t serverIdx = 1;
-    EXPECT_TRUE(dnsproxylisten.GetDnsProxyServers(servers, serverIdx));
+    EXPECT_TRUE(dnsproxylisten.GetDnsProxyServers(servers, serverIdx, 0));
 }
 
 HWTEST_F(DnsProxyRequestSocketTest, GetDnsProxyServers002, TestSize.Level0)
@@ -117,7 +117,7 @@ HWTEST_F(DnsProxyRequestSocketTest, GetDnsProxyServers002, TestSize.Level0)
     DnsProxyListen dnsproxylisten;
     std::vector<std::string> servers = {"1"};
     size_t serverIdx = 1;
-    EXPECT_FALSE(dnsproxylisten.GetDnsProxyServers(servers, serverIdx));
+    EXPECT_FALSE(dnsproxylisten.GetDnsProxyServers(servers, serverIdx, 0));
 }
 
 HWTEST_F(DnsProxyRequestSocketTest, MakeAddrInfo001, TestSize.Level0)

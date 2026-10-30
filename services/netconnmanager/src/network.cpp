@@ -344,8 +344,8 @@ static bool Layer3LocalRoute(const Route &route, bool adding)
     auto &netsys = NetsysController::GetInstance();
     std::string destination = route.destination_.address_ + "/" + std::to_string(route.destination_.prefixlen_);
     std::string nextHop = GetAddrFamily(route.destination_.address_) == AF_INET6 ? "" : LOCAL_ROUTE_NEXT_HOP;
-    int32_t ret = adding ? netsys.NetworkAddRoute(LOCAL_NET_ID, route.iface_, destination, nextHop) :
-        netsys.NetworkRemoveRoute(LOCAL_NET_ID, route.iface_, destination, nextHop);
+    int32_t ret = adding ? netsys.NetworkAddRoute(LOCAL_NET_ID, route.iface_, destination, nextHop)
+                         : netsys.NetworkRemoveRoute(LOCAL_NET_ID, route.iface_, destination, nextHop);
     return Layer3Result(ret, adding);
 }
 
@@ -353,8 +353,8 @@ static bool Layer3RemoveRoutes(NetLinkInfo &applied, const NetLinkInfo &desired,
 {
     for (auto it = applied.routeList_.begin(); it != applied.routeList_.end();) {
         // Removing an address can also remove its kernel connected route. Reconcile that family again.
-        bool addressRemoved = std::any_of(applied.netAddrList_.begin(), applied.netAddrList_.end(),
-            [&](const auto &address) {
+        bool addressRemoved =
+            std::any_of(applied.netAddrList_.begin(), applied.netAddrList_.end(), [&](const auto &address) {
                 return address.family_ == it->destination_.family_ && !desired.HasNetAddr(address);
             });
         if (desired.HasRoute(*it) && !addressRemoved) {
@@ -364,8 +364,9 @@ static bool Layer3RemoveRoutes(NetLinkInfo &applied, const NetLinkInfo &desired,
         std::string destination = it->destination_.address_ + "/" + std::to_string(it->destination_.prefixlen_);
         // Remove the local copy first; retain the key until both removals finish, including failed cleanup.
         std::string nextHop = it->destination_.family_ == AF_INET6 && !it->hasGateway_ ? "" : it->gateway_.address_;
-        if (!Layer3LocalRoute(*it, false) || !Layer3Result(NetsysController::GetInstance().NetworkRemoveRoute(
-            netId, it->iface_, destination, nextHop), false)) {
+        if (!Layer3LocalRoute(*it, false) ||
+            !Layer3Result(NetsysController::GetInstance().NetworkRemoveRoute(netId, it->iface_, destination, nextHop),
+                          false)) {
             return false;
         }
         it = applied.routeList_.erase(it);
@@ -408,10 +409,11 @@ static bool Layer3AddRoutes(NetLinkInfo &applied, const NetLinkInfo &desired, in
     for (const auto &route : desired.routeList_) {
         if (!applied.HasRoute(route)) {
             std::string destination = route.destination_.address_ + "/" + std::to_string(route.destination_.prefixlen_);
-            std::string nextHop = route.destination_.family_ == AF_INET6 && !route.hasGateway_ ? "" :
-                route.gateway_.address_;
-            if (!Layer3Result(NetsysController::GetInstance().NetworkAddRoute(netId, route.iface_, destination,
-                nextHop, route.isExcludedRoute_), true)) {
+            std::string nextHop =
+                route.destination_.family_ == AF_INET6 && !route.hasGateway_ ? "" : route.gateway_.address_;
+            if (!Layer3Result(NetsysController::GetInstance().NetworkAddRoute(netId, route.iface_, destination, nextHop,
+                                                                              route.isExcludedRoute_),
+                              true)) {
                 return false;
             }
             applied.routeList_.push_back(route);
@@ -424,8 +426,7 @@ static bool Layer3AddRoutes(NetLinkInfo &applied, const NetLinkInfo &desired, in
     return true;
 }
 
-static bool ReconcileLayer3Link(NetLinkInfo &applied, const NetLinkInfo &desired, int32_t netId,
-    NetBearType bearerType)
+static bool ReconcileLayer3Link(NetLinkInfo &applied, const NetLinkInfo &desired, int32_t netId, NetBearType bearerType)
 {
     // A live NearLink supplier owns one interface. A different interface requires a new supplier.
     if (!applied.ifaceName_.empty() && applied.ifaceName_ != desired.ifaceName_) {
