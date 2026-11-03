@@ -108,11 +108,13 @@ bool ruleContains(int f,const std::string &t,const std::string &c,const std::str
 }
 int main(){
  SharingManager m;
+ IptablesWrapper::tables[1]["filter"]["FORWARD"]={" -i sleip+ -o sleip+ -j DROP"};
+ IptablesWrapper::tables[2]["filter"]["FORWARD"]={" -i sleip+ -o sleip+ -j DROP"};
  assert(m.IpEnableForwarding("NearlinkIpShare")==0);
- assert(ruleContains(1,"filter","FORWARD","-i sleip+ -o sleip+ -j DROP"));
- assert(ruleContains(2,"filter","FORWARD","-i sleip+ -o sleip+ -j DROP"));
+ assert(!ruleContains(1,"filter","FORWARD","-i sleip+ -o sleip+ -j DROP"));
+ assert(!ruleContains(2,"filter","FORWARD","-i sleip+ -o sleip+ -j DROP"));
  assert(m.IpEnableForwarding("NearlinkIpShare")==0);
- assert(IptablesWrapper::tables[1]["filter"]["FORWARD"].size()==1);
+ assert(IptablesWrapper::tables[1]["filter"]["FORWARD"].empty());
  assert(m.IpEnableForwarding("legacy")==0);
  assert(m.EnableNat("sleip0","wlan0")==0 && m.EnableNat("sleip1","wlan0")==0);
  assert(m.EnableNat("usb0","wlan0")==0);

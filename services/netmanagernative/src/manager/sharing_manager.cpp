@@ -156,14 +156,14 @@ void SharingManager::InitChildChains()
     inited_ = ready;
 }
 
-int32_t SharingManager::SetNearlinkIsolation(bool enabled)
+int32_t SharingManager::ClearNearlinkIsolation()
 {
-    // A gateway's downlinks are independent logical links. Keep this ahead of all forwarding accepts.
+    // NearLink authenticates and delivers members on its shared logical link.
+    // Remove the legacy isolation rule during both startup and shutdown.
     const std::string rule = " FORWARD -i sleip+ -o sleip+ -j DROP";
     for (auto family : {IPTYPE_IPV4, IPTYPE_IPV6}) {
         bool exists = iptablesWrapper_->RunCheckedCommand(family, "-t filter -C" + rule) == 0;
-        if ((enabled && !exists && iptablesWrapper_->RunCheckedCommand(family, "-t filter -I" + rule) != 0) ||
-            (!enabled && exists && iptablesWrapper_->RunCheckedCommand(family, "-t filter -D" + rule) != 0))
+        if (exists && iptablesWrapper_->RunCheckedCommand(family, "-t filter -D" + rule) != 0)
             return -1;
     }
     return 0;
@@ -172,7 +172,7 @@ int32_t SharingManager::SetNearlinkIsolation(bool enabled)
 int32_t SharingManager::IpEnableForwarding(const std::string &requestor)
 {
     std::lock_guard<std::mutex> guard(initedMutex_);
-    if (requestor == "NearlinkIpShare" && SetNearlinkIsolation(true) != 0)
+    if (requestor == "NearlinkIpShare" && ClearNearlinkIsolation() != 0)
         return -1;
     bool inserted = forwardingRequests_.insert(requestor).second;
     int32_t ret = SetIpFwdEnable();
@@ -193,7 +193,7 @@ int32_t SharingManager::IpDisableForwarding(const std::string &requestor)
             forwardingRequests_.insert(requestor);
         return ret;
     }
-    return requestor == "NearlinkIpShare" ? SetNearlinkIsolation(false) : 0;
+    return requestor == "NearlinkIpShare" ? ClearNearlinkIsolation() : 0;
 }
 
 int32_t SharingManager::ReconcileNatPairs(const std::set<std::pair<std::string, std::string>> &pairs)

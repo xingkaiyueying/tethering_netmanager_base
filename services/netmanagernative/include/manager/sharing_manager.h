@@ -139,7 +139,7 @@ private:
     std::mutex sharingIfaceToIpMutex_;
 
     int32_t ReconcileNatPairs(const std::set<std::pair<std::string, std::string>> &pairs);
-    int32_t SetNearlinkIsolation(bool enabled);
+    int32_t ClearNearlinkIsolation();
     int32_t ReconcileForwardPairs(const std::set<std::string> &pairs);
     void InitChildChains();
     void CheckInited();
