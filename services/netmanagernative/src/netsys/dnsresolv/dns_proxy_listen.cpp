@@ -20,8 +20,6 @@
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <netinet/udp.h>
-#include <arpa/inet.h>
-#include <net/if.h>
 #include <array>
 #include <cerrno>
 #include <cstring>
@@ -143,64 +141,6 @@ int32_t SendDnsReply(int32_t fd, char *response, int32_t length, AlignedSockAddr
 }
 } // namespace
 
-void DnsProxyListen::StartDnsTrace(RecvBuff &request, const AlignedSockAddr &client)
-{
-    const int savedError = errno;
-    char iface[IF_NAMESIZE]{};
-    if (if_indextoname(request.replyIfindex, iface) && strncmp(iface, "sleip", 5) == 0) {
-        static std::atomic<uint64_t> sequence{0};
-        static thread_local std::chrono::steady_clock::time_point window{};
-        static thread_local unsigned sampled = 0;
-        const auto now = std::chrono::steady_clock::now();
-        if (now - window >= std::chrono::seconds(1)) {
-            window = now;
-            sampled = 0;
-        }
-        // Sample whole transactions so a delayed response retains its initial trace ID.
-        if (sampled++ < 32) {
-            request.traceId = ++sequence;
-            request.traceStarted = now;
-            TraceDns("CLIENT_RX", request, client, "-", 0, request.questionLen, 0);
-        }
-    }
-    errno = savedError;
-}
-
-void DnsProxyListen::TraceDns(const char *stage, const RecvBuff &request, const AlignedSockAddr &client,
-                            const char *server, size_t attempt, int32_t bytes, int32_t code, const char *response)
-{
-    if (!request.traceId) {
-        return;
-    }
-    const int savedError = errno;
-    char peer[INET6_ADDRSTRLEN]{}, local[INET6_ADDRSTRLEN]{};
-    bool ipv6 = client.sa.sa_family == AF_INET6;
-    const void *peerAddress = ipv6 ? static_cast<const void *>(&client.sin6.sin6_addr) : &client.sin.sin_addr;
-    const void *localAddress = ipv6 ? static_cast<const void *>(&request.replyAddress.sin6.sin6_addr) :
-                                    &request.replyAddress.sin.sin_addr;
-    (void)inet_ntop(client.sa.sa_family, peerAddress, peer, sizeof(peer));
-    (void)inet_ntop(client.sa.sa_family, localAddress, local, sizeof(local));
-    const auto *question = reinterpret_cast<const uint8_t *>(request.questionsBuff);
-    unsigned xid = request.questionLen >= 2 ? (unsigned(question[0]) << 8) | question[1] : 0;
-    unsigned responseXid = 0, rcode = 0;
-    if (response && bytes >= 4) {
-        const auto *data = reinterpret_cast<const uint8_t *>(response);
-        responseXid = (unsigned(data[0]) << 8) | data[1];
-        rcode = data[3] & 0x0f;
-    }
-    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now() - request.traceStarted).count();
-    NETNATIVE_LOGI("[NearlinkIpShare][DnsTrace] trace=%{public}llu stage=%{public}s "
-                   "client=[%{public}s]:%{public}u local=%{public}s ifindex=%{public}d netId=%{public}u "
-                   "family=%{public}d xid=%{public}u responseXid=%{public}u rcode=%{public}u "
-                   "server=%{public}s attempt=%{public}zu bytes=%{public}d code=%{public}d elapsedMs=%{public}lld",
-                   static_cast<unsigned long long>(request.traceId), stage, peer,
-                   ntohs(ipv6 ? client.sin6.sin6_port : client.sin.sin_port), local, request.replyIfindex,
-                   request.upstreamNetId, client.sa.sa_family, xid, responseXid, rcode, server, attempt, bytes, code,
-                   static_cast<long long>(elapsed));
-    errno = savedError;
-}
-
 DnsProxyListen::DnsProxyListen() : proxySockFd_(-1), proxySockFd6_(-1) {}
 DnsProxyListen::~DnsProxyListen()
 {
@@ -229,13 +169,11 @@ void DnsProxyListen::DnsParseBySocket(std::unique_ptr<RecvBuff> &recvBuff, std::
     if (recvBuff->upstreamNetId == 0) {
         int32_t defaultNetId = DnsParamCache::GetInstance().GetDefaultNetwork();
         if (defaultNetId <= 0 || defaultNetId > UINT16_MAX) {
-            TraceDns("NO_NETWORK", *recvBuff, *clientSock, "-", 0, 0, defaultNetId);
             return;
         }
         recvBuff->upstreamNetId = static_cast<uint16_t>(defaultNetId);
     }
     if (!GetDnsProxyServers(recvBuff->upstreamServers, 0, recvBuff->upstreamNetId)) {
-        TraceDns("NO_SERVERS", *recvBuff, *clientSock, "-", 0, 0, 0);
         return;
     }
     int32_t socketFd = -1;
@@ -245,13 +183,11 @@ void DnsProxyListen::DnsParseBySocket(std::unique_ptr<RecvBuff> &recvBuff, std::
         socketFd = socket(AF_INET6, SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK, IPPROTO_UDP);
     }
     if (socketFd < 0) {
-        TraceDns("SOCKET_ERROR", *recvBuff, *clientSock, "-", 0, 0, errno);
         NETNATIVE_LOGE("socketFd create socket failed %{public}d", errno);
         return;
     }
     int32_t bindRet = FwmarkClient().BindSocket(socketFd, recvBuff->upstreamNetId);
     if (bindRet != 0) {
-        TraceDns("BIND_ERROR", *recvBuff, *clientSock, "-", 0, 0, bindRet);
         NETNATIVE_LOGE(
             "[NearlinkIpShare][DnsUpstream] netId=%{public}u family=%{public}d "
             "ifindex=%{public}d stage=BIND code=%{public}d",
@@ -260,7 +196,6 @@ void DnsProxyListen::DnsParseBySocket(std::unique_ptr<RecvBuff> &recvBuff, std::
         return;
     }
     if (!PollUdpDataTransfer::MakeUdpNonBlock(socketFd)) {
-        TraceDns("NONBLOCK_ERROR", *recvBuff, *clientSock, "-", 0, 0, errno);
         NETNATIVE_LOGE("MakeNonBlock error %{public}d: %{public}s", errno, strerror(errno));
         close(socketFd);
         return;
@@ -328,7 +263,6 @@ void DnsProxyListen::SendRequest2Server(int32_t socketFd)
     auto &request = iter->second.GetRecvBuff();
     auto &servers = request.upstreamServers;
     if (serverIdx >= servers.size()) {
-        TraceDns("EXHAUSTED", request, iter->second.GetClientSock(), "-", serverIdx, 0, 0);
         NETNATIVE_LOGE("no server useful");
         serverIdxOfSocket.erase(iter);
         return;
@@ -338,25 +272,19 @@ void DnsProxyListen::SendRequest2Server(int32_t socketFd)
     socklen_t addrLen = 0;
     AlignedSockAddr &addrParse = iter->second.GetAddr();
     AlignedSockAddr &clientSock = iter->second.GetClientSock();
-    if (serverIdx > 0) {
-        TraceDns("RETRY", request, clientSock, servers[serverIdx - 1].c_str(), serverIdx, 0, 0);
-    }
     if (clientSock.sin.sin_addr.s_addr == EPOLL_LOOP_ADDR) {
         serverIdxOfSocket.erase(iter);
         return;
     }
     // LCOV_EXCL_START
     if (!MakeAddrInfo(servers, serverIdx, addrParse, clientSock)) {
-        TraceDns("SERVER_SKIP", request, clientSock, servers[serverIdx].c_str(), serverIdx + 1, 0, 0);
         return SendRequest2Server(socketFd);
     }
     if (PollUdpDataTransfer::PollUdpSendData(socketFd, iter->second.GetRecvBuff().questionsBuff,
                                              iter->second.GetRecvBuff().questionLen, addrParse, addrLen) < 0) {
-        TraceDns("UPSTREAM_TX_ERROR", request, clientSock, servers[serverIdx].c_str(), serverIdx + 1, 0, errno);
         NETNATIVE_LOGE("send failed %{public}d: %{public}s", errno, strerror(errno));
         return SendRequest2Server(socketFd);
     }
-    TraceDns("UPSTREAM_TX", request, clientSock, servers[serverIdx].c_str(), serverIdx + 1, request.questionLen, 0);
     iter->second.endTime = std::chrono::system_clock::now() + std::chrono::milliseconds(EPOLL_TIMEOUT);
     if (epoll_ctl(epollFd_, EPOLL_CTL_ADD, socketFd, iter->second.GetEventPtr()) < 0) {
         NETNATIVE_LOGE("epoll add sock %{public}d failed, errno: %{public}d", socketFd, errno);
@@ -388,19 +316,11 @@ void DnsProxyListen::SendDnsBack2Client(int32_t socketFd)
     char requesData[MAX_REQUESTDATA_LEN] = {0};
     int32_t resLen =
         PollUdpDataTransfer::PollUdpRecvData(socketFd, requesData, MAX_REQUESTDATA_LEN, addrParse, addrLen);
-    const auto &traceRequest = iter->second.GetRecvBuff();
-    const auto attempt = iter->second.GetIdx();
-    const char *traceServer = attempt > 0 && attempt <= traceRequest.upstreamServers.size() ?
-        traceRequest.upstreamServers[attempt - 1].c_str() : "-";
-    TraceDns("UPSTREAM_RX", traceRequest, clientSock, traceServer, attempt, resLen,
-             resLen < 0 ? errno : 0, requesData);
     if (resLen > 0 && CheckDnsResponse(requesData, resLen)) {
         NETNATIVE_LOG_D("send %{public}d back to client.", socketFd);
         const auto &request = iter->second.GetRecvBuff();
         if (request.replyIfindex > 0) {
             int32_t sent = SendDnsReply(proxySocket, requesData, resLen, clientSock, request);
-            TraceDns("CLIENT_TX", request, clientSock, traceServer, attempt, sent,
-                     sent == resLen ? 0 : errno, requesData);
             if (sent != resLen) {
                 NETNATIVE_LOGE(
                     "[NearlinkIpShare][DnsReply] failed family=%{public}d ifindex=%{public}d "
@@ -501,7 +421,6 @@ void DnsProxyListen::GetRequestAndTransmit(int32_t family)
         NETNATIVE_LOGE("read buff is not dns question");
         return;
     }
-    StartDnsTrace(*recvBuff, *clientAddr);
     DnsParseBySocket(recvBuff, clientAddr);
 }
 
