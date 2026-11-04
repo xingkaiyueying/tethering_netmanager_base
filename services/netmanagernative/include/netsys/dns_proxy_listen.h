@@ -94,6 +94,10 @@ private:
     void SendDnsBack2Client(int32_t socketFd);
     void clearResource();
     void SendRequest2Server(int32_t socketFd);
+    static void StartDnsTrace(RecvBuff &request, const AlignedSockAddr &client);
+    static void TraceDns(const char *stage, const RecvBuff &request, const AlignedSockAddr &client,
+                         const char *server, size_t attempt, int32_t bytes, int32_t code,
+                         const char *response = nullptr);
     bool GetDnsProxyServers(std::vector<std::string> &servers, size_t serverIdx, uint16_t netId);
     bool MakeAddrInfo(std::vector<std::string> &servers, size_t serverIdx, AlignedSockAddr &addrParse,
                       AlignedSockAddr &clientSock);

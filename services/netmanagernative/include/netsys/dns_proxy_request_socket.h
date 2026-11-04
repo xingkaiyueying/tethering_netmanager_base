@@ -41,6 +41,8 @@ struct RecvBuff {
     // Resolver configuration and socket routing must belong to the same uplink.
     uint16_t upstreamNetId = 0;
     std::vector<std::string> upstreamServers;
+    uint64_t traceId = 0;
+    std::chrono::steady_clock::time_point traceStarted{};
 };
 
 class DnsProxyRequestSocket final {

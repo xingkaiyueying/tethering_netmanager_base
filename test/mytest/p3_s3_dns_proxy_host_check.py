@@ -112,8 +112,11 @@ inline int memset_s(void*p,size_t,int value,size_t n){memset(p,value,n);return 0
 #define NETNATIVE_LOGE(...) ((void)0)
 #define NETNATIVE_LOGI(...) ((void)0)
 struct Request {RecvBuff buffer{};AlignedSockAddr client{},server{};
+ size_t GetIdx(){return 0;}
  AlignedSockAddr &GetAddr(){return server;}AlignedSockAddr &GetClientSock(){return client;}RecvBuff &GetRecvBuff(){return buffer;}};
 struct DnsProxyListen {int proxySockFd_=4,proxySockFd6_=6;std::map<int,Request> serverIdxOfSocket;int serial=10;
+ static void StartDnsTrace(RecvBuff&,const AlignedSockAddr&){}
+ static void TraceDns(const char*,const RecvBuff&,const AlignedSockAddr&,const char*,size_t,int,int,const char* =nullptr){}
  void GetRequestAndTransmit(int);void SendDnsBack2Client(int);
  static void DnsSendRecvParseData(int,char*,int,AlignedSockAddr&);static bool CheckDnsQuestion(char*,size_t);static bool CheckDnsResponse(char*,size_t);
  void DnsParseBySocket(std::unique_ptr<RecvBuff>&buf,std::unique_ptr<AlignedSockAddr>&client){Request r;r.buffer=*buf;r.client=*client;serverIdxOfSocket.emplace(++serial,r);}

@@ -22,6 +22,7 @@ def function(name):
 
 
 production = '\n'.join(function(name) for name in (
+    'void DnsProxyListen::StartDnsTrace(', 'void DnsProxyListen::TraceDns(',
     'void DnsProxyListen::DnsParseBySocket(', 'bool DnsProxyListen::GetDnsProxyServers(',
     'bool DnsProxyListen::MakeAddrInfo(', 'void DnsProxyListen::SendRequest2Server('))
 if ref:
@@ -37,6 +38,7 @@ with tempfile.TemporaryDirectory(prefix='p3-dns-upstream-') as directory:
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <atomic>
+#include <algorithm>
 #include <chrono>
 #include <cassert>
 #include <cstdio>
@@ -45,13 +47,17 @@ with tempfile.TemporaryDirectory(prefix='p3-dns-upstream-') as directory:
 #include <string>
 #include <vector>
 #include <cerrno>
+#include <cstring>
+constexpr unsigned IF_NAMESIZE=16;
+inline char *if_indextoname(unsigned,char *name){strcpy(name,"sleip0");return name;}
 constexpr int SOCK_CLOEXEC=0,SOCK_NONBLOCK=0,EPOLL_CTL_DEL=1,EPOLL_CTL_ADD=2;
 constexpr uint16_t DNS_PROXY_PORT=53;
 constexpr uint32_t EPOLL_LOOP_ADDR=16777343;
 constexpr int EPOLL_TIMEOUT=3000;
 union AlignedSockAddr {sockaddr sa;sockaddr_in sin;sockaddr_in6 sin6;};
 struct RecvBuff {char questionsBuff[512]{};int questionLen=12,replyIfindex=48;
- AlignedSockAddr replyAddress{};uint16_t upstreamNetId=0;std::vector<std::string> upstreamServers;};
+ AlignedSockAddr replyAddress{};uint16_t upstreamNetId=0;std::vector<std::string> upstreamServers;
+ uint64_t traceId=0;std::chrono::steady_clock::time_point traceStarted{};};
 struct Request {std::unique_ptr<AlignedSockAddr> client;std::unique_ptr<RecvBuff> buffer;
  AlignedSockAddr server{};size_t index=0;std::chrono::system_clock::time_point endTime;
  Request(int,std::unique_ptr<AlignedSockAddr>&&c,std::unique_ptr<RecvBuff>&&b):client(std::move(c)),buffer(std::move(b)){}
@@ -63,7 +69,11 @@ struct DnsProxyListen {static inline std::atomic<uint16_t> netId_{101};
  void DnsParseBySocket(std::unique_ptr<RecvBuff>&,std::unique_ptr<AlignedSockAddr>&);
  bool GetDnsProxyServers(std::vector<std::string>&,size_t,uint16_t);
  bool MakeAddrInfo(std::vector<std::string>&,size_t,AlignedSockAddr&,AlignedSockAddr&);
- void SendRequest2Server(int);};
+ void SendRequest2Server(int);
+ static void StartDnsTrace(RecvBuff&,const AlignedSockAddr&);
+ static void TraceDns(const char*,const RecvBuff&,const AlignedSockAddr&,const char*,size_t,int32_t,int32_t,const char* =nullptr);};
+inline std::vector<std::string> traceStages;
+template<class... Args> void TraceLog(const char*,uint64_t,const char *stage,Args&&...){traceStages.push_back(stage);}
 inline int nextFd=10,bindError=0,configCalls=0,sendCalls=0,closes=0,wrongRouteSends=0;
 inline bool emptyConfig=false,nonblock=true,switchDuringConfig=false;
 inline int32_t defaultNetId=101;
@@ -90,11 +100,12 @@ inline int epoll_ctl(int,int,int,void*){return 0;}
 #define socket Socket
 #define close Close
 #define NETNATIVE_LOGE(...) ((void)0)
+#define NETNATIVE_LOGI(...) TraceLog(__VA_ARGS__)
 ''' + production + r'''
 int main(){
  DnsProxyListen d;
  auto start=[&](int family){auto b=std::make_unique<RecvBuff>();auto c=std::make_unique<AlignedSockAddr>();
- c->sa.sa_family=family;d.DnsParseBySocket(b,c);};
+ c->sa.sa_family=family;DnsProxyListen::StartDnsTrace(*b,*c);d.DnsParseBySocket(b,c);};
  for(int family:{AF_INET,AF_INET6}){
   DnsProxyListen::netId_=101;switchDuringConfig=true;
   start(family);
@@ -123,6 +134,18 @@ int main(){
  assert(sendCalls==sends&&closes==closed+1&&d.serverIdxOfSocket.empty());
  nonblock=true;emptyConfig=true;int allocated=nextFd;start(AF_INET);
  assert(nextFd==allocated&&d.serverIdxOfSocket.empty());
+ assert(std::find(traceStages.begin(),traceStages.end(),"UPSTREAM_TX")!=traceStages.end());
+ assert(std::find(traceStages.begin(),traceStages.end(),"SERVER_SKIP")!=traceStages.end());
+ assert(std::find(traceStages.begin(),traceStages.end(),"BIND_ERROR")!=traceStages.end());
+ assert(std::find(traceStages.begin(),traceStages.end(),"NO_SERVERS")!=traceStages.end());
+ RecvBuff trace;AlignedSockAddr client{};client.sa.sa_family=AF_INET6;
+ errno=EAGAIN;DnsProxyListen::StartDnsTrace(trace,client);assert(errno==EAGAIN&&trace.traceId);
+ char shortResponse[1]{};
+ DnsProxyListen::TraceDns("UPSTREAM_RX",trace,client,"2001:db8::53",1,1,0,shortResponse);
+ assert(errno==EAGAIN&&traceStages.back()=="UPSTREAM_RX");
+ unsigned sampled=0;for(int i=0;i<100;++i){RecvBuff t;DnsProxyListen::StartDnsTrace(t,client);sampled+=t.traceId!=0;}
+ assert(sampled<=32);
+ puts("DNS diagnostics: production trace helpers, short-response bounds, rate limit and errno preservation PASS");
  puts("DNS production forwarding: selected/default netId capture, IPv4/IPv6 binding, concurrent uplink switch, retry snapshot, unavailable default, bind/setup failure without unbound fallback PASS");
 }
 ''', encoding='utf-8')
