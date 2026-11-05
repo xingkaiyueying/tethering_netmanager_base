@@ -22,6 +22,7 @@
 #include <netinet/udp.h>
 #include <array>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <sys/socket.h>
 #include <thread>
@@ -54,6 +55,28 @@ constexpr int32_t EPOLL_LOOP_EXIT = 1;
 constexpr uint32_t EPOLL_LOOP_ADDR = 16777343;
 
 namespace {
+class DnsErrorLog {
+public:
+    bool ShouldReport(int32_t code)
+    {
+        auto now = std::chrono::steady_clock::now();
+        ++count_;
+        if (count_ == 1 || code != code_ || now - last_ >= std::chrono::seconds(5)) {
+            code_ = code;
+            last_ = now;
+            return true;
+        }
+        return false;
+    }
+    uint64_t Count() const
+    {
+        return count_;
+    }
+private:
+    int32_t code_{0};
+    uint64_t count_{0};
+    std::chrono::steady_clock::time_point last_{};
+};
 int32_t ReceiveDnsRequest(int32_t fd, RecvBuff &buffer, AlignedSockAddr &client, int32_t family)
 {
     alignas(cmsghdr) std::array<char, CMSG_SPACE(sizeof(in6_pktinfo)) + CMSG_SPACE(sizeof(in_pktinfo))> control{};
@@ -188,10 +211,15 @@ void DnsProxyListen::DnsParseBySocket(std::unique_ptr<RecvBuff> &recvBuff, std::
     }
     int32_t bindRet = FwmarkClient().BindSocket(socketFd, recvBuff->upstreamNetId);
     if (bindRet != 0) {
-        NETNATIVE_LOGE(
-            "[NearlinkIpShare][DnsUpstream] netId=%{public}u family=%{public}d "
-            "ifindex=%{public}d stage=BIND code=%{public}d",
-            recvBuff->upstreamNetId, clientSock->sa.sa_family, recvBuff->replyIfindex, bindRet);
+        static DnsErrorLog errors;
+        const int32_t errorCode = bindRet;
+        if (errors.ShouldReport(errorCode)) {
+            NETNATIVE_LOGE(
+                "[NearlinkIpShare][DnsUpstream] netId=%{public}u family=%{public}d "
+                "ifindex=%{public}d stage=BIND code=%{public}d failures=%{public}llu",
+                recvBuff->upstreamNetId, clientSock->sa.sa_family, recvBuff->replyIfindex, errorCode,
+                static_cast<unsigned long long>(errors.Count()));
+        }
         close(socketFd);
         return;
     }
@@ -322,10 +350,15 @@ void DnsProxyListen::SendDnsBack2Client(int32_t socketFd)
         if (request.replyIfindex > 0) {
             int32_t sent = SendDnsReply(proxySocket, requesData, resLen, clientSock, request);
             if (sent != resLen) {
-                NETNATIVE_LOGE(
-                    "[NearlinkIpShare][DnsReply] failed family=%{public}d ifindex=%{public}d "
-                    "bytes=%{public}d code=%{public}d",
-                    clientSock.sa.sa_family, request.replyIfindex, sent, errno);
+                static DnsErrorLog errors;
+                const int32_t errorCode = errno;
+                if (errors.ShouldReport(errorCode)) {
+                    NETNATIVE_LOGE(
+                        "[NearlinkIpShare][DnsReply] failed family=%{public}d ifindex=%{public}d "
+                        "bytes=%{public}d code=%{public}d failures=%{public}llu",
+                        clientSock.sa.sa_family, request.replyIfindex, sent, errorCode,
+                        static_cast<unsigned long long>(errors.Count()));
+                }
             }
         } else {
             DnsSendRecvParseData(proxySocket, requesData, resLen, clientSock);

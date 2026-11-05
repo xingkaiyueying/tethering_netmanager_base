@@ -28,8 +28,10 @@ def function(name):
     return source[start:end]
 
 helpers = ''
+if 'class DnsErrorLog {' in source:
+    helpers += function('class DnsErrorLog {') + ';\n'
 if 'int32_t ReceiveDnsRequest(' in source:
-    helpers = function('int32_t ReceiveDnsRequest(') + '\n' + function('int32_t SendDnsReply(')
+    helpers += function('int32_t ReceiveDnsRequest(') + '\n' + function('int32_t SendDnsReply(')
 production = '\n'.join(function(name) for name in [
     'void DnsProxyListen::GetRequestAndTransmit(', 'void DnsProxyListen::SendDnsBack2Client(',
     'void DnsProxyListen::DnsSendRecvParseData(', 'bool DnsProxyListen::CheckDnsQuestion(',
@@ -40,6 +42,7 @@ with tempfile.TemporaryDirectory(prefix='p3-s3-dns-reply-') as directory:
     test.write_text(r'''
 #include <array>
 #include <cassert>
+#include <chrono>
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
