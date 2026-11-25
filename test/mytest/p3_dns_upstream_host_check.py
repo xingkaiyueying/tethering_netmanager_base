@@ -24,6 +24,8 @@ def function(name):
 production = '\n'.join(function(name) for name in (
     'void DnsProxyListen::DnsParseBySocket(', 'bool DnsProxyListen::GetDnsProxyServers(',
     'bool DnsProxyListen::MakeAddrInfo(', 'void DnsProxyListen::SendRequest2Server('))
+if 'class DnsErrorLog {' in source:
+    production = function('class DnsErrorLog {') + ';\n' + production
 if ref:
     # Adapt only the old private signature so the same harness executes the old implementation.
     production = production.replace('size_t serverIdx)', 'size_t serverIdx, uint16_t netId)')

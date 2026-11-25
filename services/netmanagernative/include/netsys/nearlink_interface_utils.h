@@ -20,19 +20,7 @@
 namespace OHOS::nmd {
 inline bool IsNearlinkInterface(const std::string &iface)
 {
-    constexpr size_t prefixLength = 5;
-    constexpr size_t maxInterfaceLength = 15;
-    if (iface.size() <= prefixLength || iface.size() > maxInterfaceLength ||
-        iface.compare(0, prefixLength, "sleip") != 0 ||
-        (iface.size() > prefixLength + 1 && iface[prefixLength] == '0')) {
-        return false;
-    }
-    for (size_t i = prefixLength; i < iface.size(); ++i) {
-        if (iface[i] < '0' || iface[i] > '9') {
-            return false;
-        }
-    }
-    return true;
+    return iface == "sleip0";
 }
 } // namespace OHOS::nmd
 #endif // NEARLINK_INTERFACE_UTILS_H
